@@ -1,0 +1,89 @@
+from datasets import load_dataset
+from typing import List, Dict, Tuple, Optional
+import random
+
+
+class DatasetLoader:
+    def __init__(self, dataset_name: str, subset: Optional[str] = None):
+        self.dataset_name = dataset_name
+        self.subset = subset
+        self.dataset = None
+        self.loaded_data = []
+    
+    def load_cnn_dailymail(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading CNN/DailyMail dataset ({split} split)...")
+        dataset = load_dataset('cnn_dailymail', '3.0.0', split=split)
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            data.append({
+                'id': item.get('id', ''),
+                'article': item['article'],
+                'highlights': item['highlights'],
+                'reference_summary': item['highlights']
+            })
+        
+        self.loaded_data = data
+        return data
+    
+    def load_arxiv_papers(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading arXiv scientific papers dataset ({split} split)...")
+        try:
+            dataset = load_dataset('scientific_papers', 'arxiv', split=split)
+        except:
+            print("Note: scientific_papers dataset might require manual download.")
+            dataset = load_dataset('ccdv/arxiv-summarization', split=split)
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            abstract = item.get('abstract', item.get('summary', ''))
+            article = item.get('article', item.get('text', ''))
+            
+            data.append({
+                'id': item.get('id', f"arxiv_{len(data)}"),
+                'article': article,
+                'abstract': abstract,
+                'reference_summary': abstract
+            })
+        
+        self.loaded_data = data
+        return data
+    
+    def load_dataset(self, dataset_type: str, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        if dataset_type.lower() in ['cnn_dailymail', 'cnn', 'dailymail']:
+            return self.load_cnn_dailymail(split, max_samples)
+        elif dataset_type.lower() in ['arxiv', 'scientific_papers']:
+            return self.load_arxiv_papers(split, max_samples)
+        else:
+            raise ValueError(f"Unsupported dataset type: {dataset_type}")
+    
+    def get_sample_data(self, n_samples: int = 10) -> List[Dict[str, str]]:
+        if not self.loaded_data:
+            raise ValueError("No data loaded. Call load_dataset() first.")
+        
+        return random.sample(self.loaded_data, min(n_samples, len(self.loaded_data)))
+    
+    def get_data_statistics(self) -> Dict[str, float]:
+        if not self.loaded_data:
+            return {}
+        
+        article_lengths = [len(item['article'].split()) for item in self.loaded_data]
+        summary_lengths = [len(item['reference_summary'].split()) for item in self.loaded_data]
+        
+        return {
+            'total_samples': len(self.loaded_data),
+            'avg_article_length': sum(article_lengths) / len(article_lengths),
+            'avg_summary_length': sum(summary_lengths) / len(summary_lengths),
+            'max_article_length': max(article_lengths),
+            'min_article_length': min(article_lengths),
+            'max_summary_length': max(summary_lengths),
+            'min_summary_length': min(summary_lengths)
+        }
