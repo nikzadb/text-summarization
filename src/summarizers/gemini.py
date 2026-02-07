@@ -6,7 +6,7 @@ from .traditional import BaseSummarizer
 
 
 class GeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-pro"):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash", max_output_tokens: int = 200):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
@@ -36,7 +36,10 @@ class GeminiSummarizer(BaseSummarizer):
         """
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self.model.generate_content(
+                prompt,
+                generation_config={"max_output_tokens": 8192}
+            )
             return response.text.strip()
         except Exception as e:
             print(f"Gemini API error: {e}")
