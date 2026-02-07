@@ -2,11 +2,21 @@ from rouge_score import rouge_scorer
 from bert_score import score as bert_score
 import numpy as np
 from typing import List, Dict, Tuple, Any
+import warnings
+from transformers import logging
+import torch
+from tqdm import tqdm
+
+# Suppress transformers warnings
+logging.set_verbosity_error()
+warnings.filterwarnings("ignore")
 
 
 class EvaluationMetrics:
     def __init__(self):
         self.rouge_scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+        # Set device for BERT scoring
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
     
     def compute_rouge_scores(self, reference: str, candidate: str) -> Dict[str, float]:
         scores = self.rouge_scorer.score(reference, candidate)
@@ -23,8 +33,8 @@ class EvaluationMetrics:
             'rougeL_f1': scores['rougeL'].fmeasure
         }
     
-    def compute_bert_scores(self, references: List[str], candidates: List[str], lang: str = 'en') -> Dict[str, List[float]]:
-        P, R, F1 = bert_score(candidates, references, lang=lang, verbose=False)
+    def compute_bert_scores(self, references: List[str], candidates: List[str], lang: str = 'en', batch_size: int = 64) -> Dict[str, List[float]]:
+        P, R, F1 = bert_score(candidates, references, lang=lang, verbose=False, device=self.device, batch_size=batch_size)
         
         return {
             'bert_precision': P.tolist(),
@@ -44,9 +54,11 @@ class EvaluationMetrics:
         
         return {**rouge_scores, **bert_metrics}
     
-    def evaluate_batch_summaries(self, references: List[str], candidates: List[str]) -> Dict[str, Any]:
+    def evaluate_batch_summaries(self, references: List[str], candidates: List[str], batch_size: int = 64) -> Dict[str, Any]:
         if len(references) != len(candidates):
             raise ValueError("References and candidates must have the same length")
+        
+        print(f"Evaluating {len(references)} summaries using device: {self.device}")
         
         rouge_scores = {
             'rouge1_precision': [], 'rouge1_recall': [], 'rouge1_f1': [],
@@ -54,12 +66,16 @@ class EvaluationMetrics:
             'rougeL_precision': [], 'rougeL_recall': [], 'rougeL_f1': []
         }
         
-        for ref, cand in zip(references, candidates):
+        # Process ROUGE scores with progress bar
+        print("Computing ROUGE scores...")
+        for ref, cand in tqdm(zip(references, candidates), total=len(references), desc="ROUGE"):
             rouge_result = self.compute_rouge_scores(ref, cand)
             for key, value in rouge_result.items():
                 rouge_scores[key].append(value)
         
-        bert_scores = self.compute_bert_scores(references, candidates)
+        # Process BERT scores in optimized batch mode
+        print("Computing BERT scores...")
+        bert_scores = self.compute_bert_scores(references, candidates, batch_size=batch_size)
         
         all_scores = {**rouge_scores, **bert_scores}
         

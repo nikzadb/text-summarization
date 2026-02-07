@@ -1,4 +1,5 @@
 import time
+import torch
 from typing import Dict, Any
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from .traditional import BaseSummarizer
@@ -15,12 +16,19 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
     
     def _load_model(self):
         try:
+            # Check for MPS (Apple Silicon GPU) support
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            print(f"Using device: {device}")
+            
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self.model = self.model.to(device)
+            
             self.pipeline = pipeline(
                 "summarization", 
                 model=self.model, 
                 tokenizer=self.tokenizer,
+                device=device,
                 framework="pt"
             )
         except Exception as e:
@@ -59,9 +67,14 @@ class T5Summarizer(OpenSourceLLMSummarizer):
     
     def _load_model(self):
         try:
+            # Check for MPS (Apple Silicon GPU) support
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            print(f"Using device for T5: {device}")
+            
             self.pipeline = pipeline(
                 "summarization", 
                 model=self.model_name,
+                device=device,
                 framework="pt"
             )
         except Exception as e:

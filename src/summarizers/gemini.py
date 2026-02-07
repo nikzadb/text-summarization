@@ -6,23 +6,24 @@ from .traditional import BaseSummarizer
 
 
 class GeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash", max_output_tokens: int = 200):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 100):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         self.model = None
+        self.max_output_tokens = max_output_tokens
         self._setup_model()
         
         # Pricing per 1K tokens (approximate)
-        self.input_price_per_1k = 0.00025  # $0.25 per 1M tokens
-        self.output_price_per_1k = 0.00075  # $0.75 per 1M tokens
+        self.input_price_per_1k = 0.0001  # $0.10 per 1M tokens
+        self.output_price_per_1k = 0.0004  # $0.40 per 1M tokens
     
     def _setup_model(self):
         if not self.api_key:
             raise ValueError("Gemini API key not provided. Set GEMINI_API_KEY environment variable or pass api_key parameter.")
         
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(self.model_name, max_output_tokens=200)
+        self.model = genai.GenerativeModel(self.model_name)
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         if not self.model:
@@ -38,7 +39,7 @@ class GeminiSummarizer(BaseSummarizer):
         try:
             response = self.model.generate_content(
                 prompt,
-                generation_config={"max_output_tokens": 8192}
+                generation_config={"max_output_tokens": self.max_output_tokens}
             )
             return response.text.strip()
         except Exception as e:

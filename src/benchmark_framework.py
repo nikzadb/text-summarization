@@ -95,11 +95,14 @@ class BenchmarkFramework:
         summary_stats = self.evaluator.get_summary_statistics(evaluation_result)
 
         # Save method's summaries
-        summaries_df = pd.DataFrame({'article': [sample['article'] for sample in dataset_samples],
-                                     'reference_summary': references,
-                                     'summary': summaries})
+        print(f"Saving summaries for {method_name}...")
+        summaries_df = pd.DataFrame({'reference_summary': references[0][:30] + ' ...',
+                                     f'{method_name}_summary': summaries})
         
         summaries_df.to_csv(f'summaries_{dataset_name}_{method_name}.csv', index=False)
+
+        # free up the dataframe memory
+        summaries_df = None 
         
         result = BenchmarkResult(
             method=method_name,
