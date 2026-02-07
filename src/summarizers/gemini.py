@@ -22,7 +22,7 @@ class GeminiSummarizer(BaseSummarizer):
             raise ValueError("Gemini API key not provided. Set GEMINI_API_KEY environment variable or pass api_key parameter.")
         
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(self.model_name)
+        self.model = genai.GenerativeModel(self.model_name, max_output_tokens=200)
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         if not self.model:

@@ -17,6 +17,8 @@ import os
 import sys
 from dotenv import load_dotenv
 
+import pandas as pd
+
 # Add src directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
@@ -31,10 +33,10 @@ def main():
                        choices=['cnn_dailymail', 'arxiv'],
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
-                       default=['textrank', 'tfidfrank', 't5', 'distilbart'],
+                       default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini'],
                        choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini'],
                        help='Summarization methods to benchmark')
-    parser.add_argument('--max-samples', type=int, default=20,
+    parser.add_argument('--max-samples', type=int, default=0,
                        help='Maximum number of samples per dataset')
     parser.add_argument('--max-sentences', type=int, default=3,
                        help='Maximum sentences in summary')
@@ -72,6 +74,9 @@ def main():
             max_samples=args.max_samples,
             max_sentences=args.max_sentences
         )
+
+        # Save summarisations
+        pd.DataFrame(results).to_csv('summarisatuion-results.csv', index=False)        
         
         # Display results
         framework.print_summary()

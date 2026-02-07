@@ -2,10 +2,24 @@ from abc import ABC, abstractmethod
 import time
 from typing import Dict, Any
 import numpy as np
-from gensim.summarization import summarize as gensim_summarize
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
 
 
 class BaseSummarizer(ABC):
@@ -38,16 +52,60 @@ class TextRankSummarizer(BaseSummarizer):
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         try:
-            word_count = len(text.split())
-            ratio = min(0.5, (max_sentences * 20) / word_count)
-            summary = gensim_summarize(text, ratio=ratio)
-            if not summary:
-                sentences = text.split('.')[:max_sentences]
-                return '. '.join(sentences) + '.'
-            return summary
+            # Preprocess text and split into sentences
+            sentences = sent_tokenize(text)
+            
+            if len(sentences) <= max_sentences:
+                return ' '.join(sentences)
+            
+            # Preprocess sentences
+            clean_sentences = []
+            for sentence in sentences:
+                clean_sentence = re.sub(r'[^a-zA-Z0-9\s]', '', sentence.lower())
+                clean_sentences.append(clean_sentence)
+            
+            # Remove stopwords and tokenize
+            stop_words = set(stopwords.words('english'))
+            
+            # Create word frequency table
+            word_freq = {}
+            for sentence in clean_sentences:
+                words = word_tokenize(sentence)
+                for word in words:
+                    if word.lower() not in stop_words and len(word) > 1:
+                        if word in word_freq:
+                            word_freq[word] += 1
+                        else:
+                            word_freq[word] = 1
+            
+            # Calculate sentence scores
+            sentence_scores = {}
+            for i, sentence in enumerate(clean_sentences):
+                words = word_tokenize(sentence)
+                word_count = 0
+                score = 0
+                for word in words:
+                    if word in word_freq and len(word) > 1:
+                        score += word_freq[word]
+                        word_count += 1
+                
+                if word_count > 0:
+                    sentence_scores[i] = score / word_count
+                else:
+                    sentence_scores[i] = 0
+            
+            # Get top sentences
+            ranked_sentences = sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)
+            top_sentence_indices = [x[0] for x in ranked_sentences[:max_sentences]]
+            top_sentence_indices.sort()  # Maintain original order
+            
+            selected_sentences = [sentences[i] for i in top_sentence_indices]
+            return ' '.join(selected_sentences)
+            
         except Exception as e:
-            sentences = text.split('.')[:max_sentences]
-            return '. '.join(sentences) + '.'
+            # Fallback: return first few sentences
+            sentences = sent_tokenize(text)
+            return ' '.join(sentences[:max_sentences])
 
 
 class TFIDFRankSummarizer(BaseSummarizer):
