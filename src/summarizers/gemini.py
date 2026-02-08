@@ -2,11 +2,11 @@ import time
 import os
 from typing import Dict, Any
 import google.generativeai as genai
-from .traditional import BaseSummarizer
+from .traditional import BaseSummarizer, TextRankSummarizer
 
 
 class GeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 100):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 150):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
@@ -68,4 +68,58 @@ class GeminiSummarizer(BaseSummarizer):
             'cost': cost,
             'input_tokens': input_tokens,
             'output_tokens': output_tokens
+        }
+
+
+class HybridTextRankGeminiSummarizer(BaseSummarizer):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 150):
+        super().__init__(f"Hybrid-TextRank-Gemini")
+        self.textrank = TextRankSummarizer()
+        self.gemini = GeminiSummarizer(api_key, model_name, max_output_tokens)
+    
+    def summarize(self, text: str, max_sentences: int = 3) -> str:
+        # Step 1: Use TextRank to extract 10 key sentences
+        intermediate_summary = self.textrank.summarize(text, max_sentences=10)
+        
+        # Step 2: Apply Gemini to the TextRank output for final summarization
+        final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
+        
+        return final_summary
+    
+    def get_cost(self) -> float:
+        # Only Gemini has cost, TextRank is free
+        return self.gemini.get_cost()
+    
+    def benchmark_summarize(self, text: str, max_sentences: int = 3) -> Dict[str, Any]:
+        start_time = time.time()
+        
+        # Step 1: TextRank preprocessing
+        textrank_start = time.time()
+        intermediate_summary = self.textrank.summarize(text, max_sentences=10)
+        textrank_time = time.time() - textrank_start
+        
+        # Step 2: Gemini refinement
+        gemini_start = time.time()
+        final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
+        gemini_time = time.time() - gemini_start
+        
+        total_time = time.time() - start_time
+        
+        # Calculate cost and token estimates
+        input_tokens = len(intermediate_summary.split()) * 1.3  # Tokens sent to Gemini
+        output_tokens = len(final_summary.split()) * 1.3
+        
+        cost = (input_tokens / 1000 * self.gemini.input_price_per_1k + 
+                output_tokens / 1000 * self.gemini.output_price_per_1k)
+        
+        return {
+            'summary': final_summary,
+            'time_taken': total_time,
+            'method': self.name,
+            'cost': cost,
+            'textrank_time': textrank_time,
+            'gemini_time': gemini_time,
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'intermediate_summary': intermediate_summary
         }

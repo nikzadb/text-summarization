@@ -34,7 +34,7 @@ def main():
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
                        default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini'],
-                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini'],
+                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini'],
                        help='Summarization methods to benchmark')
     parser.add_argument('--max-samples', type=int, default=0,
                        help='Maximum number of samples per dataset')
