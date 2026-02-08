@@ -79,7 +79,7 @@ class HybridTextRankGeminiSummarizer(BaseSummarizer):
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         # Step 1: Use TextRank to extract 10 key sentences
-        intermediate_summary = self.textrank.summarize(text, max_sentences=15)
+        intermediate_summary = self.textrank.summarize(text, max_sentences=50)
         
         # Step 2: Apply Gemini to the TextRank output for final summarization
         final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
@@ -99,7 +99,7 @@ class HybridTFIDFRankGeminiSummarizer(BaseSummarizer):
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         # Step 1: Use TFIDFRank to extract 15 key sentences
-        intermediate_summary = self.tfidfrank.summarize(text, max_sentences=15)
+        intermediate_summary = self.tfidfrank.summarize(text, max_sentences=50)
         
         # Step 2: Apply Gemini to the TFIDFRank output for final summarization
         final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
