@@ -33,8 +33,8 @@ def main():
                        choices=['cnn_dailymail', 'arxiv'],
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
-                       default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini'],
-                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini'],
+                       default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
+                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
                        help='Summarization methods to benchmark')
     parser.add_argument('--max-samples', type=int, default=0,
                        help='Maximum number of samples per dataset')

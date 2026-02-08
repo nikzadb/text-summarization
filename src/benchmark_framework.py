@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
 from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer
-from .summarizers.gemini import GeminiSummarizer, HybridTextRankGeminiSummarizer
+from .summarizers.gemini import GeminiSummarizer, HybridTFIDFRankGeminiSummarizer, HybridTextRankGeminiSummarizer
 from .dataset_loader import DatasetLoader
 from .evaluation_metrics import EvaluationMetrics
 from .lambda_simulation import LambdaSimulator
@@ -50,8 +50,9 @@ class BenchmarkFramework:
         try:
             self.summarizers['gemini'] = GeminiSummarizer()
             self.summarizers['hybrid_textrank_gemini'] = HybridTextRankGeminiSummarizer()
+            self.summarizers['hybrid_tfidfrank_gemini'] = HybridTFIDFRankGeminiSummarizer()
         except Exception as e:
-            print(f"Warning: Could not initialize Gemini summarizers: {e}")
+            print(f"Warning: Could not initialize Gemini-based summarizers: {e}")
     
     def benchmark_method(self, 
                         method_name: str, 
