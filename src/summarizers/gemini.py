@@ -6,7 +6,7 @@ from .traditional import BaseSummarizer, TextRankSummarizer, TFIDFRankSummarizer
 
 
 class GeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 200):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 500):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
@@ -72,7 +72,7 @@ class GeminiSummarizer(BaseSummarizer):
 
 
 class HybridTextRankGeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 200):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 500):
         super().__init__(f"Hybrid-TextRank-Gemini")
         self.textrank = TextRankSummarizer()
         self.gemini = GeminiSummarizer(api_key, model_name, max_output_tokens)
@@ -92,7 +92,7 @@ class HybridTextRankGeminiSummarizer(BaseSummarizer):
 
 
 class HybridTFIDFRankGeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 200):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 500):
         super().__init__(f"Hybrid-TFIDFRank-Gemini")
         self.tfidfrank = TFIDFRankSummarizer()
         self.gemini = GeminiSummarizer(api_key, model_name, max_output_tokens)
