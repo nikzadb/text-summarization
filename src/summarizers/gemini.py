@@ -6,7 +6,7 @@ from .traditional import BaseSummarizer, TextRankSummarizer
 
 
 class GeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 150):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 200):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
@@ -72,14 +72,14 @@ class GeminiSummarizer(BaseSummarizer):
 
 
 class HybridTextRankGeminiSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 150):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-2.0-flash", max_output_tokens: int = 200):
         super().__init__(f"Hybrid-TextRank-Gemini")
         self.textrank = TextRankSummarizer()
         self.gemini = GeminiSummarizer(api_key, model_name, max_output_tokens)
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         # Step 1: Use TextRank to extract 10 key sentences
-        intermediate_summary = self.textrank.summarize(text, max_sentences=10)
+        intermediate_summary = self.textrank.summarize(text, max_sentences=15)
         
         # Step 2: Apply Gemini to the TextRank output for final summarization
         final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
