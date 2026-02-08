@@ -64,6 +64,12 @@ class BenchmarkFramework:
             raise ValueError(f"Unknown method: {method_name}")
         
         summarizer = self.summarizers[method_name]
+        # Configure summarizer for dataset-specific regime (e.g., Hybrid extraction sentence count)
+        if hasattr(summarizer, "set_dataset") and callable(getattr(summarizer, "set_dataset")):
+            try:
+                summarizer.set_dataset(dataset_name)
+            except Exception as e:
+                print(f"Warning: could not set dataset on summarizer {method_name}: {e}")
         summaries = []
         references = []
         times = []
