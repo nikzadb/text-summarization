@@ -94,15 +94,40 @@ class BenchmarkFramework:
         evaluation_result = self.evaluator.evaluate_batch_summaries(references, summaries)
         summary_stats = self.evaluator.get_summary_statistics(evaluation_result)
 
-        # Save method's summaries
-        print(f"Saving summaries for {method_name}...")
-        summaries_df = pd.DataFrame({'reference_summary': references[0][:30] + ' ...',
-                                     f'{method_name}_summary': summaries})
+        # Save detailed sample-level results
+        print(f"Saving detailed results for {method_name}...")
+        individual_scores = evaluation_result['individual_scores']
         
-        summaries_df.to_csv(f'summaries_{dataset_name}_{method_name}.csv', index=False)
+        detailed_data = []
+        for i, (ref, summ) in enumerate(zip(references, summaries)):
+            sample_data = {
+                'sample_id': i,
+                'method': method_name,
+                'dataset': dataset_name,
+                'reference_summary': ref,
+                'generated_summary': summ,
+                'processing_time': times[i],
+                'cost': costs[i],
+                'rouge1_precision': individual_scores['rouge1_precision'][i],
+                'rouge1_recall': individual_scores['rouge1_recall'][i], 
+                'rouge1_f1': individual_scores['rouge1_f1'][i],
+                'rouge2_precision': individual_scores['rouge2_precision'][i],
+                'rouge2_recall': individual_scores['rouge2_recall'][i],
+                'rouge2_f1': individual_scores['rouge2_f1'][i],
+                'rougeL_precision': individual_scores['rougeL_precision'][i],
+                'rougeL_recall': individual_scores['rougeL_recall'][i],
+                'rougeL_f1': individual_scores['rougeL_f1'][i],
+                'bert_precision': individual_scores['bert_precision'][i],
+                'bert_recall': individual_scores['bert_recall'][i],
+                'bert_f1': individual_scores['bert_f1'][i]
+            }
+            detailed_data.append(sample_data)
+        
+        detailed_df = pd.DataFrame(detailed_data)
+        detailed_df.to_csv(f'detailed_results_{dataset_name}_{method_name}.csv', index=False)
 
         # free up the dataframe memory
-        summaries_df = None 
+        detailed_df = None 
         
         result = BenchmarkResult(
             method=method_name,
