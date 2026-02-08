@@ -120,6 +120,10 @@ class BenchmarkFramework:
         )
         
         self.results.append(result)
+        
+        # Save intermediate results after each method
+        self._save_intermediate_results()
+        
         return result
     
     def run_comprehensive_benchmark(self, 
@@ -159,6 +163,15 @@ class BenchmarkFramework:
                 print(f"✗ Failed to load {dataset_name}: {e}")
         
         return all_results
+    
+    def _save_intermediate_results(self):
+        """Save intermediate results as CSV after each method completion"""
+        if self.results:
+            df = self.get_results_dataframe()
+            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"benchmark_results_intermediate_{timestamp}.csv"
+            df.to_csv(filename, index=False)
+            print(f"Intermediate results saved to {filename}")
     
     def get_results_dataframe(self) -> pd.DataFrame:
         if not self.results:
