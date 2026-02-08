@@ -15,8 +15,13 @@ warnings.filterwarnings("ignore")
 class EvaluationMetrics:
     def __init__(self):
         self.rouge_scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-        # Set device for BERT scoring
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        # Set device for BERT scoring (CUDA or MPS)
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
     
     def compute_rouge_scores(self, reference: str, candidate: str) -> Dict[str, float]:
         scores = self.rouge_scorer.score(reference, candidate)

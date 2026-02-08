@@ -16,8 +16,13 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
     
     def _load_model(self):
         try:
-            # Check for MPS (Apple Silicon GPU) support
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            # Check for GPU support (CUDA or MPS)
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
             print(f"Using device: {device}")
             
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -67,8 +72,13 @@ class T5Summarizer(OpenSourceLLMSummarizer):
     
     def _load_model(self):
         try:
-            # Check for MPS (Apple Silicon GPU) support
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            # Check for GPU support (CUDA or MPS)
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
             print(f"Using device for T5: {device}")
             
             self.pipeline = pipeline(
