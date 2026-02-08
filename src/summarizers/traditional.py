@@ -10,6 +10,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
 
+
 # Download required NLTK data
 try:
     nltk.data.find('tokenizers/punkt')
@@ -116,30 +117,21 @@ class TextRankSummarizer(BaseSummarizer):
             return ' '.join(sentences[:max_sentences])
 
 
+
 class TFIDFRankSummarizer(BaseSummarizer):
     def __init__(self):
         super().__init__("TFIDFRank")
-    
+
     def summarize(self, text: str, max_sentences: int = 3) -> str:
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        
+        sentences = [s.strip() for s in sent_tokenize(text) if s.strip()]
         if len(sentences) <= max_sentences:
-            return '. '.join(sentences) + '.'
-        
-        vectorizer = TfidfVectorizer(stop_words='english')
-        try:
-            tfidf_matrix = vectorizer.fit_transform(sentences)
-            similarity_matrix = cosine_similarity(tfidf_matrix)
-            
-            G = nx.from_numpy_array(similarity_matrix)
-            scores = nx.pagerank(G)
-            
-            ranked_sentences = sorted(
-                [(scores[i], sentences[i]) for i in range(len(sentences))],
-                reverse=True
-            )
-            
-            selected_sentences = [sent for _, sent in ranked_sentences[:max_sentences]]
-            return '. '.join(selected_sentences) + '.'
-        except Exception as e:
-            return '. '.join(sentences[:max_sentences]) + '.'
+            return " ".join(sentences)
+
+        vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1,2))
+        X = vectorizer.fit_transform(sentences)               # (N, V)
+        centroid = np.asarray(X.mean(axis=0))                 # (1, V)
+        scores = cosine_similarity(X, centroid).reshape(-1)   # (N,)
+
+        top_idx = np.argsort(-scores)[:max_sentences]
+        top_idx = sorted(top_idx.tolist())  # restore original order
+        return " ".join(sentences[i] for i in top_idx)
