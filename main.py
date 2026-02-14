@@ -7,7 +7,7 @@ This script benchmarks various text summarization techniques including:
 2. Open source LLM models (BART, T5, DistilBART)
 3. Gemini API
 
-Datasets: CNN/DailyMail, arXiv scientific papers
+Datasets: CNN/DailyMail, arXiv scientific papers, WikiHow
 Metrics: ROUGE scores, BERTScore
 Computing: AWS Lambda simulation (optional)
 """
@@ -30,7 +30,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Text Summarization Benchmarking Tool')
     parser.add_argument('--datasets', nargs='+', default=['cnn_dailymail'], 
-                       choices=['cnn_dailymail', 'arxiv'],
+                       choices=['cnn_dailymail', 'arxiv', 'wikihow'],
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
                        default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
