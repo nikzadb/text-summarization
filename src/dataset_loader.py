@@ -59,7 +59,17 @@ class DatasetLoader:
     
     def load_wikihow(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         print(f"Loading WikiHow dataset ({split} split)...")
-        dataset = load_dataset('wikihow', 'all', split=split)
+        try:
+            # Try the cleaned version first
+            dataset = load_dataset('gursi26/wikihow-cleaned', split=split)
+        except:
+            try:
+                # Fall back to sentence-transformers version
+                dataset = load_dataset('sentence-transformers/wikihow', split=split)
+            except:
+                # Final fallback to wikihow with train split (as it might not have test)
+                print("Note: Using train split as test split may not be available")
+                dataset = load_dataset('gursi26/wikihow-cleaned', split='train')
         
         if max_samples and max_samples < len(dataset):
             indices = random.sample(range(len(dataset)), max_samples)
@@ -67,11 +77,15 @@ class DatasetLoader:
         
         data = []
         for item in dataset:
+            # Handle different possible field names
+            article = item.get('article', item.get('text', item.get('input', '')))
+            summary = item.get('summary', item.get('headline', item.get('target', item.get('output', ''))))
+            
             data.append({
                 'id': item.get('id', f"wikihow_{len(data)}"),
-                'article': item['text'],
-                'summary': item['headline'],
-                'reference_summary': item['headline']
+                'article': article,
+                'summary': summary,
+                'reference_summary': summary
             })
         
         self.loaded_data = data
