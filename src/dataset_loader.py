@@ -57,11 +57,47 @@ class DatasetLoader:
         self.loaded_data = data
         return data
     
+    def load_wikihow(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading WikiHow dataset ({split} split)...")
+        try:
+            # Try the cleaned version first
+            dataset = load_dataset('gursi26/wikihow-cleaned', split=split)
+        except:
+            try:
+                # Fall back to sentence-transformers version
+                dataset = load_dataset('sentence-transformers/wikihow', split=split)
+            except:
+                # Final fallback to wikihow with train split (as it might not have test)
+                print("Note: Using train split as test split may not be available")
+                dataset = load_dataset('gursi26/wikihow-cleaned', split='train')
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            # Handle different possible field names
+            article = item.get('article', item.get('text', item.get('input', '')))
+            summary = item.get('summary', item.get('headline', item.get('target', item.get('output', ''))))
+            
+            data.append({
+                'id': item.get('id', f"wikihow_{len(data)}"),
+                'article': article,
+                'summary': summary,
+                'reference_summary': summary
+            })
+        
+        self.loaded_data = data
+        return data
+    
     def load_dataset(self, dataset_type: str, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         if dataset_type.lower() in ['cnn_dailymail', 'cnn', 'dailymail']:
             return self.load_cnn_dailymail(split, max_samples)
         elif dataset_type.lower() in ['arxiv', 'scientific_papers']:
             return self.load_arxiv_papers(split, max_samples)
+        elif dataset_type.lower() in ['wikihow']:
+            return self.load_wikihow(split, max_samples)
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
     
