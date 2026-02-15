@@ -114,12 +114,12 @@ class DatasetLoader:
     def load_samsum(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         print(f"Loading SAMSum dataset ({split} split)...")
         try:
-            dataset = load_dataset('knkarthick/samsum', split=split)
+            dataset = load_dataset('Samsung/samsum', split=split)
         except:
             try:
-                dataset = load_dataset('samsum_dataset', split=split)
+                dataset = load_dataset('knkarthick/samsum', split=split)
             except:
-                dataset = load_dataset('sumsum/samsum', split=split)
+                dataset = load_dataset('nyamuda/samsum', split=split)
         
         if max_samples and max_samples < len(dataset):
             indices = random.sample(range(len(dataset)), max_samples)
@@ -137,6 +137,40 @@ class DatasetLoader:
         self.loaded_data = data
         return data
     
+    def load_qmsum(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading QMSum dataset ({split} split)...")
+        try:
+            dataset = load_dataset('ioeddk/qmsum', split=split)
+        except:
+            try:
+                dataset = load_dataset('mattercalm/qmsum', split=split)
+            except:
+                dataset = load_dataset('pszemraj/qmsum-cleaned', split=split)
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            # QMSum has meeting transcripts and query-based summaries
+            meeting_text = item.get('meeting_transcript', item.get('transcript', ''))
+            query = item.get('query', '')
+            summary = item.get('summary', '')
+            
+            # Combine query and meeting text as the article
+            article = f"Query: {query}\n\nMeeting Transcript: {meeting_text}" if query else meeting_text
+            
+            data.append({
+                'id': item.get('id', f"qmsum_{len(data)}"),
+                'article': article,
+                'summary': summary,
+                'reference_summary': summary
+            })
+        
+        self.loaded_data = data
+        return data
+    
     def load_dataset(self, dataset_type: str, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         if dataset_type.lower() in ['cnn_dailymail', 'cnn', 'dailymail']:
             return self.load_cnn_dailymail(split, max_samples)
@@ -148,6 +182,8 @@ class DatasetLoader:
             return self.load_govreport(split, max_samples)
         elif dataset_type.lower() in ['samsum']:
             return self.load_samsum(split, max_samples)
+        elif dataset_type.lower() in ['qmsum']:
+            return self.load_qmsum(split, max_samples)
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
     
