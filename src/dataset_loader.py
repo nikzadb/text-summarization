@@ -171,6 +171,33 @@ class DatasetLoader:
         self.loaded_data = data
         return data
     
+    def load_mediasum(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading MediaSum dataset ({split} split)...")
+        try:
+            dataset = load_dataset('ccdv/mediasum', split=split)
+        except:
+            dataset = load_dataset('nbroad/mediasum', split=split)
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            # MediaSum has interview transcripts and summaries
+            transcript = item.get('transcript', item.get('dialogue', ''))
+            summary = item.get('summary', '')
+            
+            data.append({
+                'id': item.get('id', f"mediasum_{len(data)}"),
+                'article': transcript,
+                'summary': summary,
+                'reference_summary': summary
+            })
+        
+        self.loaded_data = data
+        return data
+    
     def load_dataset(self, dataset_type: str, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         if dataset_type.lower() in ['cnn_dailymail', 'cnn', 'dailymail']:
             return self.load_cnn_dailymail(split, max_samples)
@@ -184,6 +211,8 @@ class DatasetLoader:
             return self.load_samsum(split, max_samples)
         elif dataset_type.lower() in ['qmsum']:
             return self.load_qmsum(split, max_samples)
+        elif dataset_type.lower() in ['mediasum']:
+            return self.load_mediasum(split, max_samples)
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
     
