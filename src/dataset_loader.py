@@ -91,6 +91,26 @@ class DatasetLoader:
         self.loaded_data = data
         return data
     
+    def load_govreport(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
+        print(f"Loading GovReport dataset ({split} split)...")
+        dataset = load_dataset('ccdv/govreport-summarization', split=split)
+        
+        if max_samples and max_samples < len(dataset):
+            indices = random.sample(range(len(dataset)), max_samples)
+            dataset = dataset.select(indices)
+        
+        data = []
+        for item in dataset:
+            data.append({
+                'id': item.get('id', f"govreport_{len(data)}"),
+                'article': item['report'],
+                'summary': item['summary'],
+                'reference_summary': item['summary']
+            })
+        
+        self.loaded_data = data
+        return data
+    
     def load_dataset(self, dataset_type: str, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         if dataset_type.lower() in ['cnn_dailymail', 'cnn', 'dailymail']:
             return self.load_cnn_dailymail(split, max_samples)
@@ -98,6 +118,8 @@ class DatasetLoader:
             return self.load_arxiv_papers(split, max_samples)
         elif dataset_type.lower() in ['wikihow']:
             return self.load_wikihow(split, max_samples)
+        elif dataset_type.lower() in ['govreport']:
+            return self.load_govreport(split, max_samples)
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
     
