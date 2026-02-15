@@ -153,13 +153,10 @@ class DatasetLoader:
         
         data = []
         for item in dataset:
+
             # QMSum has meeting transcripts and query-based summaries
-            meeting_text = item.get('meeting_transcript', item.get('transcript', ''))
-            query = item.get('query', '')
-            summary = item.get('summary', '')
-            
-            # Combine query and meeting text as the article
-            article = f"Query: {query}\n\nMeeting Transcript: {meeting_text}" if query else meeting_text
+            article = item.get('text', '')
+            summary = item.get('answer', '')
             
             data.append({
                 'id': item.get('id', f"qmsum_{len(data)}"),
@@ -181,11 +178,11 @@ class DatasetLoader:
         if max_samples and max_samples < len(dataset):
             indices = random.sample(range(len(dataset)), max_samples)
             dataset = dataset.select(indices)
-        
+
         data = []
         for item in dataset:
             # MediaSum has interview transcripts and summaries
-            transcript = item.get('transcript', item.get('dialogue', ''))
+            transcript = item.get('document', '')
             summary = item.get('summary', '')
             
             data.append({
