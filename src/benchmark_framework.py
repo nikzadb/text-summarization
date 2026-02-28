@@ -46,13 +46,30 @@ class BenchmarkFramework:
         self.summarizers = {
             'textrank': TextRankSummarizer(),
             'tfidfrank': TFIDFRankSummarizer(),
-            't5': T5Summarizer(),
             'distilbart': DistilBARTSummarizer(),
             'bart': OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
-            'Pegasus-X': PegasusXSummarizer(),
-            'LongformerEncoderDecoder': LongformerEncoderDecoderSummarizer(),
-            'Retrieval-Augmented-Summarizer': RetrievalAugmentedSummarizer()
         }
+        
+        # Try to initialize models that might fail due to version conflicts
+        try:
+            self.summarizers['t5'] = T5Summarizer()
+        except Exception as e:
+            print(f"Warning: Could not initialize T5 summarizer: {e}")
+        
+        try:
+            self.summarizers['Pegasus-X'] = PegasusXSummarizer()
+        except Exception as e:
+            print(f"Warning: Could not initialize Pegasus-X summarizer: {e}")
+            
+        try:
+            self.summarizers['LongformerEncoderDecoder'] = LongformerEncoderDecoderSummarizer()
+        except Exception as e:
+            print(f"Warning: Could not initialize LongformerEncoderDecoder summarizer: {e}")
+            
+        try:
+            self.summarizers['Retrieval-Augmented-Summarizer'] = RetrievalAugmentedSummarizer()
+        except Exception as e:
+            print(f"Warning: Could not initialize Retrieval-Augmented-Summarizer: {e}")
         
         try:
             self.summarizers['gemini'] = GeminiSummarizer()
