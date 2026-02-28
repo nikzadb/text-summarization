@@ -404,13 +404,15 @@ class EvaluationMetrics:
             Comprehensive statistical analysis for all metrics
         """
         
-        # Define all metrics to analyze
+        # Define all metrics to analyze (including performance metrics)
         metrics = {
             'rouge1_f1': 'ROUGE-1 F1',
             'rouge2_f1': 'ROUGE-2 F1', 
             'rougeL_f1': 'ROUGE-L F1',
             'bert_f1': 'BERT F1',
-            'combined_score': 'Combined Score'
+            'combined_score': 'Combined Score',
+            'processing_time': 'Processing Time (s)',
+            'cost': 'Cost ($)'
         }
         
         comprehensive_results = {
@@ -437,8 +439,11 @@ class EvaluationMetrics:
                     combined_scores = [(r1 + r2 + rl) / 3.0 
                                      for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
                     method_scores[method_name] = combined_scores
+                elif metric_key in ['processing_time', 'cost']:
+                    # Use performance metrics from detailed results
+                    method_scores[method_name] = individual_scores[metric_key]
                 else:
-                    # Use existing metric scores
+                    # Use existing quality metric scores
                     method_scores[method_name] = individual_scores[metric_key]
             
             all_method_scores[metric_key] = method_scores
@@ -449,7 +454,13 @@ class EvaluationMetrics:
             
             # Find best performing method for this metric
             method_means = {method: np.mean(scores) for method, scores in method_scores.items()}
-            best_method = max(method_means.keys(), key=lambda k: method_means[k])
+            
+            # For time and cost, lower is better; for quality metrics, higher is better
+            if metric_key in ['processing_time', 'cost']:
+                best_method = min(method_means.keys(), key=lambda k: method_means[k])
+            else:
+                best_method = max(method_means.keys(), key=lambda k: method_means[k])
+            
             best_scores = method_scores[best_method]
             
             # Calculate bootstrap CIs for all methods
@@ -484,10 +495,19 @@ class EvaluationMetrics:
                     significantly_different = p_value < (1 - confidence_level) or not ci_overlap
                     
                     if significantly_different:
-                        if method_means[method_name] < method_means[best_method]:
-                            interpretation = f"Significantly worse than {best_method}"
+                        # Interpretation depends on whether lower or higher is better
+                        if metric_key in ['processing_time', 'cost']:
+                            # For time/cost, lower is better
+                            if method_means[method_name] > method_means[best_method]:
+                                interpretation = f"Significantly worse than {best_method} (higher {metric_key.replace('_', ' ')})"
+                            else:
+                                interpretation = f"Significantly better than {best_method} (lower {metric_key.replace('_', ' ')})"
                         else:
-                            interpretation = f"Significantly better than {best_method}"
+                            # For quality metrics, higher is better  
+                            if method_means[method_name] < method_means[best_method]:
+                                interpretation = f"Significantly worse than {best_method}"
+                            else:
+                                interpretation = f"Significantly better than {best_method}"
                     else:
                         interpretation = f"No significant difference from {best_method}"
                     

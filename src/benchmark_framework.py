@@ -334,12 +334,14 @@ class BenchmarkFramework:
                         # Load detailed CSV results
                         detailed_df = pd.read_csv(detailed_file)
                         
-                        # Convert to evaluation format
+                        # Convert to evaluation format (including performance metrics)
                         individual_scores = {
                             'rouge1_f1': detailed_df['rouge1_f1'].tolist(),
                             'rouge2_f1': detailed_df['rouge2_f1'].tolist(),
                             'rougeL_f1': detailed_df['rougeL_f1'].tolist(),
-                            'bert_f1': detailed_df['bert_f1'].tolist()
+                            'bert_f1': detailed_df['bert_f1'].tolist(),
+                            'processing_time': detailed_df['processing_time'].tolist(),
+                            'cost': detailed_df['cost'].tolist()
                         }
                         
                         # Calculate average scores for compatibility
@@ -386,6 +388,11 @@ class BenchmarkFramework:
                     
                     print(f"\n💾 Comprehensive statistical analysis saved to: {stats_filename}")
                     
+                    # Generate enhanced benchmark results CSV with confidence intervals
+                    enhanced_csv_filename = f"benchmark_results_with_CI_{dataset_name}.csv"
+                    self._generate_enhanced_benchmark_csv(comprehensive_results, enhanced_csv_filename)
+                    print(f"💾 Enhanced benchmark results with CIs saved to: {enhanced_csv_filename}")
+                    
                 except Exception as e:
                     print(f"❌ Error during statistical analysis for {dataset_name}: {e}")
                     import traceback
@@ -411,3 +418,92 @@ class BenchmarkFramework:
             return obj.item()
         else:
             return obj
+    
+    def _generate_enhanced_benchmark_csv(self, comprehensive_results: Dict[str, Any], filename: str):
+        """
+        Generate enhanced benchmark results CSV with confidence intervals for all metrics.
+        
+        Creates a CSV that replicates benchmark_results.csv format but adds CI columns
+        for every metric (ROUGE scores, BERT score, Combined score, Time, Cost).
+        """
+        try:
+            enhanced_data = []
+            dataset_name = comprehensive_results['dataset']
+            metrics_analysis = comprehensive_results['metrics_analysis']
+            confidence_level = comprehensive_results['confidence_level']
+            
+            # Get all methods from the first metric analysis
+            first_metric = list(metrics_analysis.keys())[0]
+            methods = list(metrics_analysis[first_metric]['bootstrap_results'].keys())
+            
+            for method in methods:
+                row_data = {
+                    'Method': method,
+                    'Dataset': dataset_name
+                }
+                
+                # Add each metric with its confidence interval
+                for metric_key, analysis in metrics_analysis.items():
+                    bootstrap_info = analysis['bootstrap_results'][method]
+                    metric_name = analysis['metric_name']
+                    
+                    # Format metric name for column headers
+                    if metric_key == 'rouge1_f1':
+                        base_col = 'ROUGE-1 F1'
+                    elif metric_key == 'rouge2_f1':
+                        base_col = 'ROUGE-2 F1'
+                    elif metric_key == 'rougeL_f1':
+                        base_col = 'ROUGE-L F1'
+                    elif metric_key == 'bert_f1':
+                        base_col = 'BERT F1'
+                    elif metric_key == 'combined_score':
+                        base_col = 'Combined Score'
+                    elif metric_key == 'processing_time':
+                        base_col = 'Avg Time (s)'
+                    elif metric_key == 'cost':
+                        base_col = 'Avg Cost ($)'
+                    else:
+                        base_col = metric_name
+                    
+                    # Add mean value
+                    row_data[base_col] = bootstrap_info['mean']
+                    
+                    # Add confidence interval bounds
+                    row_data[f'{base_col} CI Lower'] = bootstrap_info['ci_lower']
+                    row_data[f'{base_col} CI Upper'] = bootstrap_info['ci_upper']
+                    
+                    # Add standard error
+                    row_data[f'{base_col} Std Error'] = bootstrap_info['std_error']
+                    
+                    # Add sample size
+                    row_data[f'{base_col} Sample Size'] = bootstrap_info['n_samples']
+                
+                # Add statistical significance information
+                for metric_key, analysis in metrics_analysis.items():
+                    test_info = analysis['statistical_tests'][method]
+                    metric_name = analysis['metric_name']
+                    
+                    if metric_key == 'combined_score':  # Use combined score as primary significance indicator
+                        row_data['Is Best Method'] = test_info['is_best']
+                        row_data['P-value vs Best'] = test_info['p_value'] if test_info['p_value'] is not None else 'N/A'
+                        row_data['Effect Size'] = test_info['effect_size']
+                        row_data['Significantly Different'] = test_info['significantly_different']
+                        row_data['Statistical Interpretation'] = test_info['interpretation']
+                
+                enhanced_data.append(row_data)
+            
+            # Create DataFrame and save to CSV
+            enhanced_df = pd.DataFrame(enhanced_data)
+            
+            # Sort by combined score (descending) for readability
+            enhanced_df = enhanced_df.sort_values('Combined Score', ascending=False)
+            
+            # Save to CSV with proper formatting
+            enhanced_df.to_csv(filename, index=False, float_format='%.6f')
+            
+            print(f"✓ Enhanced CSV generated with {len(enhanced_data)} methods and {confidence_level*100:.0f}% confidence intervals")
+            
+        except Exception as e:
+            print(f"❌ Error generating enhanced CSV: {e}")
+            import traceback
+            traceback.print_exc()
