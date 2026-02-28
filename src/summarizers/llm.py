@@ -411,8 +411,8 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
 
 class T5Summarizer(OpenSourceLLMSummarizer):
     def __init__(self):
-        self.model_name = "t5-small"
-        BaseSummarizer.__init__(self, "T5-small")
+        self.model_name = "t5-base"
+        BaseSummarizer.__init__(self, "T5-base")
         self._load_model()
     
     def _load_model(self):
@@ -519,7 +519,7 @@ class PegasusXSummarizer(OpenSourceLLMSummarizer):
 class LongformerEncoderDecoderSummarizer(BaseSummarizer):
     def __init__(self, prefer_domain=None):
         super().__init__("LongformerEncoderDecoder")
-        self.model_name = "allenai/led-large-16384-arxiv"  # Default: arXiv-trained (more general)
+        self.model_name = "allenai/led-base-16384"  # Default: allenai/led-base-16384 to fit on 16G GPU
         self.prefer_domain = prefer_domain  # Can be 'news', 'scientific', 'books', etc.
         self.tokenizer = None
         self.model = None
@@ -642,9 +642,10 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
         # Get domain-specific models or default to general
         domain = self.prefer_domain or 'general'
 
-        # Use general checkpoint regardless of the dataset domain type
+        # Use general checkpoint regardless of the dataset domain type.
+        # Use allenai/led-base-16384 to fit on 16G GPU
         # preferred_models = domain_models.get(domain, domain_models['general'])
-        preferred_models = ["allenai/led-large-16384"]
+        preferred_models = ["allenai/led-base-16384"]
         
         print(f"Using model preference {preferred_models} for domain: {domain}")
         return preferred_models
