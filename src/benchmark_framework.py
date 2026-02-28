@@ -1,6 +1,7 @@
 import time
 import json
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -197,7 +198,8 @@ class BenchmarkFramework:
                                   datasets: List[str] = ['cnn_dailymail', 'arxiv'],
                                   methods: Optional[List[str]] = None,
                                   max_samples: int = 50,
-                                  max_sentences: int = 3) -> List[BenchmarkResult]:
+                                  max_sentences: int = 3,
+                                  perform_statistical_analysis: bool = True) -> List[BenchmarkResult]:
         
         if methods is None:
             methods = list(self.summarizers.keys()) + list(self.heavy_model_classes.keys())
@@ -228,6 +230,13 @@ class BenchmarkFramework:
                         
             except Exception as e:
                 print(f"✗ Failed to load {dataset_name}: {e}")
+        
+        # Perform statistical analysis if requested
+        if perform_statistical_analysis and all_results:
+            print("\n" + "=" * 60)
+            print("🔬 PERFORMING STATISTICAL ANALYSIS")
+            print("=" * 60)
+            self._perform_statistical_analysis_by_dataset(methods)
         
         return all_results
     
@@ -294,3 +303,107 @@ class BenchmarkFramework:
             else:
                 best = df.loc[df[metric].idxmax()]
                 print(f"Best {metric}: {best['Method']} ({best[metric]:.4f})")
+    
+    def _perform_statistical_analysis_by_dataset(self, methods: List[str]):
+        """
+        Perform statistical analysis for each dataset separately.
+        Groups evaluation results by dataset and performs bootstrap confidence interval
+        analysis and statistical comparison with the best method.
+        """
+        import glob
+        
+        # Group results by dataset
+        datasets_processed = set()
+        
+        for result in self.results:
+            dataset_name = result.dataset
+            if dataset_name in datasets_processed:
+                continue
+                
+            datasets_processed.add(dataset_name)
+            print(f"\n📊 Analyzing dataset: {dataset_name}")
+            print("-" * 50)
+            
+            # Load detailed results for this dataset
+            method_results = {}
+            for method in methods:
+                detailed_file = f"detailed_results_{dataset_name}_{method}.csv"
+                
+                if glob.glob(detailed_file):
+                    try:
+                        # Load detailed CSV results
+                        detailed_df = pd.read_csv(detailed_file)
+                        
+                        # Convert to evaluation format
+                        individual_scores = {
+                            'rouge1_f1': detailed_df['rouge1_f1'].tolist(),
+                            'rouge2_f1': detailed_df['rouge2_f1'].tolist(),
+                            'rougeL_f1': detailed_df['rougeL_f1'].tolist(),
+                            'bert_f1': detailed_df['bert_f1'].tolist()
+                        }
+                        
+                        # Calculate average scores for compatibility
+                        average_scores = {}
+                        for key, values in individual_scores.items():
+                            average_scores[f"{key}_mean"] = np.mean(values)
+                            average_scores[f"{key}_std"] = np.std(values)
+                        
+                        method_results[method] = {
+                            'individual_scores': individual_scores,
+                            'average_scores': average_scores,
+                            'sample_count': len(detailed_df)
+                        }
+                        
+                        print(f"✓ Loaded {len(detailed_df)} samples for {method}")
+                        
+                    except Exception as e:
+                        print(f"⚠️  Could not load detailed results for {method}: {e}")
+                        continue
+                else:
+                    print(f"⚠️  No detailed results found for {method}")
+            
+            # Perform statistical analysis if we have data
+            if len(method_results) >= 2:
+                print(f"\n🔬 Statistical Analysis for {dataset_name}")
+                print("=" * 50)
+                
+                try:
+                    # Perform statistical comparison
+                    statistical_results = self.evaluator.statistical_comparison(
+                        method_results, dataset_name, metric='combined_score'
+                    )
+                    
+                    # Generate and display report
+                    report = self.evaluator.generate_statistical_report(statistical_results)
+                    print(report)
+                    
+                    # Save statistical results
+                    stats_filename = f"statistical_analysis_{dataset_name}.json"
+                    with open(stats_filename, 'w') as f:
+                        # Convert numpy types to native Python types for JSON serialization
+                        json_compatible_results = self._make_json_compatible(statistical_results)
+                        json.dump(json_compatible_results, f, indent=2)
+                    
+                    print(f"\n💾 Statistical analysis saved to: {stats_filename}")
+                    
+                except Exception as e:
+                    print(f"❌ Error during statistical analysis for {dataset_name}: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"⚠️  Not enough methods ({len(method_results)}) for statistical comparison")
+    
+    def _make_json_compatible(self, obj):
+        """Convert numpy types to Python native types for JSON serialization"""
+        if isinstance(obj, dict):
+            return {key: self._make_json_compatible(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_json_compatible(item) for item in obj]
+        elif isinstance(obj, np.float64) or isinstance(obj, np.float32):
+            return float(obj)
+        elif isinstance(obj, np.int64) or isinstance(obj, np.int32):
+            return int(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
