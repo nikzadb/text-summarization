@@ -1,9 +1,16 @@
 import time
 import json
 import pandas as pd
+import gc
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from tqdm import tqdm
+
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
 from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer, PegasusXSummarizer, RetrievalAugmentedSummarizer, LongformerEncoderDecoderSummarizer
@@ -42,34 +49,40 @@ class BenchmarkFramework:
         
         self._initialize_summarizers()
     
+    def _clear_cuda_memory(self):
+        """Clear CUDA memory between model loads."""
+        if HAS_TORCH and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+            print(f"🔧 CUDA memory cleared")
+
     def _initialize_summarizers(self):
+        # Initialize lightweight models first
         self.summarizers = {
             'textrank': TextRankSummarizer(),
             'tfidfrank': TFIDFRankSummarizer(),
-            'distilbart': DistilBARTSummarizer(),
-            'bart': OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
         }
         
-        # Try to initialize models that might fail due to version conflicts
-        try:
-            self.summarizers['t5'] = T5Summarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize T5 summarizer: {e}")
+        # Initialize neural models one by one with memory management
+        neural_models = [
+            ('distilbart', lambda: DistilBARTSummarizer()),
+            ('bart', lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn')),
+            ('t5', lambda: T5Summarizer()),
+            ('Pegasus-X', lambda: PegasusXSummarizer()),
+            ('LongformerEncoderDecoder', lambda: LongformerEncoderDecoderSummarizer()),
+            ('Retrieval-Augmented-Summarizer', lambda: RetrievalAugmentedSummarizer()),
+        ]
         
-        try:
-            self.summarizers['Pegasus-X'] = PegasusXSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize Pegasus-X summarizer: {e}")
-            
-        try:
-            self.summarizers['LongformerEncoderDecoder'] = LongformerEncoderDecoderSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize LongformerEncoderDecoder summarizer: {e}")
-            
-        try:
-            self.summarizers['Retrieval-Augmented-Summarizer'] = RetrievalAugmentedSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize Retrieval-Augmented-Summarizer: {e}")
+        for name, model_func in neural_models:
+            try:
+                self._clear_cuda_memory()  # Clear memory before each model
+                print(f"🔄 Initializing {name}...")
+                self.summarizers[name] = model_func()
+                print(f"✅ {name} initialized successfully")
+            except Exception as e:
+                print(f"⚠️  Could not initialize {name}: {e}")
+                # Clear memory even after failure
+                self._clear_cuda_memory()
         
         try:
             self.summarizers['gemini'] = GeminiSummarizer()

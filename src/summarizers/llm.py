@@ -27,7 +27,15 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
             
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-            self.model = self.model.to(device)
+            
+            # Try CUDA first, fallback to CPU if OOM
+            try:
+                self.model = self.model.to(device)
+            except torch.cuda.OutOfMemoryError:
+                print(f"⚠️  CUDA OOM for {self.model_name}, falling back to CPU")
+                device = "cpu"
+                torch.cuda.empty_cache()  # Clear CUDA memory
+                self.model = self.model.to(device)
             
             # Try different pipeline tasks based on model type
             try:
