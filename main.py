@@ -34,9 +34,9 @@ def main():
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
                        default=['textrank', 'tfidfrank', 
-                                #  'distilbart', 'bart', 'Pegasus-X',             
-                                #  'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
-                                #  'gemini', 'GPT-5-mini'
+                                 'distilbart', 'bart', 'Pegasus-X',             
+                                 'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
+                                 'gemini', 'GPT-5-mini'
                                  ],
                        choices=['textrank', 'tfidfrank', 
                                 't5', 'distilbart', 'bart', 

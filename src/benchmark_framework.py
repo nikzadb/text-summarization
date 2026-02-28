@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
-from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer, PegasusXSummarizer
+from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer, PegasusXSummarizer, LongformerEncoderDecoderSummarizer
 from .summarizers.gemini import GeminiSummarizer, HybridTFIDFRankGeminiSummarizer, HybridTextRankGeminiSummarizer
 from .dataset_loader import DatasetLoader
 from .evaluation_metrics import EvaluationMetrics
@@ -48,7 +48,8 @@ class BenchmarkFramework:
             't5': T5Summarizer(),
             'distilbart': DistilBARTSummarizer(),
             'bart': OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
-            'Pegasus-X': PegasusXSummarizer()
+            'Pegasus-X': PegasusXSummarizer(),
+            'LongformerEncoderDecoder': LongformerEncoderDecoderSummarizer()
         }
         
         try:
@@ -307,7 +308,7 @@ class BenchmarkFramework:
         
         return analysis_results
     
-    def save_statistical_results(self, analysis_results: Dict[str, Any], filename: str = "statistical_analysis.json"):
+    def save_statistical_results(self, analysis_results: Dict[str, Any]):
         """
         Save statistical analysis results to file.
         
@@ -362,11 +363,12 @@ class BenchmarkFramework:
             
             serializable_results[dataset_name] = dataset_dict
         
-        # Save to file
-        with open(filename, 'w') as f:
-            json.dump(serializable_results, f, indent=2)
+            # Save to file
+            filename = f'statistical_analysis_{dataset_name}.json'
+            with open(filename, 'w') as f:
+                json.dump(serializable_results, f, indent=2)
         
-        print(f"Statistical analysis results saved to {filename}")
+            print(f"Statistical analysis results saved to {filename}")
     
     def print_summary_with_statistics(self, analysis_results: Dict[str, Any] = None):
         """
