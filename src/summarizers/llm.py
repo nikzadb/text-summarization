@@ -145,24 +145,27 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
             # Load LED model for generation
             try:
                 from transformers import pipeline
-                # Try text2text-generation first for newer transformers
-                try:
-                    self.pipeline = pipeline(
-                        "text2text-generation",
-                        model=self.generation_model_name,
-                        device=self.device if self.device != "mps" else "cpu",  # Pipeline may not support MPS
-                        framework="pt"
-                    )
-                    print(f"✓ Loaded generation model with text2text-generation: {self.generation_model_name}")
-                except Exception:
-                    # Fallback to summarization task
-                    self.pipeline = pipeline(
-                        "summarization",
-                        model=self.generation_model_name,
-                        device=self.device if self.device != "mps" else "cpu",
-                        framework="pt"
-                    )
-                    print(f"✓ Loaded generation model with summarization: {self.generation_model_name}")
+                # Try different pipeline tasks for LED model
+                pipeline_tasks = ["text2text-generation", "text-generation"]
+                
+                pipeline_loaded = False
+                for task in pipeline_tasks:
+                    try:
+                        self.pipeline = pipeline(
+                            task,
+                            model=self.generation_model_name,
+                            device=self.device if self.device != "mps" else "cpu",
+                            framework="pt"
+                        )
+                        print(f"✓ Loaded generation model with {task}: {self.generation_model_name}")
+                        pipeline_loaded = True
+                        break
+                    except Exception as task_error:
+                        print(f"⚠️  Failed to load with {task}: {task_error}")
+                        continue
+                
+                if not pipeline_loaded:
+                    raise Exception("All pipeline tasks failed")
             except Exception as gen_error:
                 print(f"⚠️  Failed to load generation model as pipeline: {gen_error}")
                 # Try manual loading
@@ -320,8 +323,14 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
                 max_length = max_sentences * 30
                 min_length = max_sentences * 10
                 
+                # For LED models, we might need to add a summarization prompt
+                if 'led' in self.generation_model_name.lower():
+                    prompt = f"Summarize this text: {retrieved_content}"
+                else:
+                    prompt = retrieved_content
+                
                 result = self.pipeline(
-                    retrieved_content,
+                    prompt,
                     max_length=max_length,
                     min_length=min_length,
                     truncation=True,
@@ -330,7 +339,11 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
                 # Handle different output formats
                 if isinstance(result, list) and len(result) > 0:
                     if 'generated_text' in result[0]:
-                        return result[0]['generated_text']
+                        # For text-generation pipeline, remove the input prompt
+                        generated = result[0]['generated_text']
+                        if generated.startswith(prompt):
+                            generated = generated[len(prompt):].strip()
+                        return generated
                     elif 'summary_text' in result[0]:
                         return result[0]['summary_text']
                     else:
@@ -567,12 +580,16 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
                 
         except Exception as e:
             print(f"Error loading LongformerEncoderDecoder model: {e}")
-            print("Falling back to BART model...")
-            # Fallback to a working model
+            print("Falling back to manual model loading...")
+            # Fallback to manual model loading (no pipeline)
             try:
-                from transformers import pipeline
-                self.pipeline = pipeline("summarization", model="facebook/bart-base")
+                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+                self.tokenizer = AutoTokenizer.from_pretrained("facebook/bart-base")
+                self.model = AutoModelForSeq2SeqLM.from_pretrained("facebook/bart-base")
+                self.model = self.model.to("cpu")
                 self.device = "cpu"
+                self.actual_model_name = "facebook/bart-base"
+                print("✓ Fallback to BART manual loading successful")
             except Exception as fallback_error:
                 print(f"Fallback also failed: {fallback_error}")
                 raise
@@ -617,9 +634,9 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
         # Get domain-specific models or default to general
         domain = self.prefer_domain or 'general'
 
-        # Use general checkpint regardless of the dataset domain type
+        # Use general checkpoint regardless of the dataset domain type
         # preferred_models = domain_models.get(domain, domain_models['general'])
-        preferred_models = "allenai/led-large-16384"
+        preferred_models = ["allenai/led-large-16384"]
         
         print(f"Using model preference {preferred_models} for domain: {domain}")
         return preferred_models
