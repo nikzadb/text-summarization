@@ -122,7 +122,7 @@ class EvaluationMetrics:
     
     def bootstrap_confidence_interval(self, 
                                     scores: List[float], 
-                                    n_bootstrap: int = 1000, 
+                                    n_bootstrap: int = 5000, 
                                     confidence_level: float = 0.95) -> Dict[str, float]:
         """
         Calculate bootstrap confidence interval for a metric.

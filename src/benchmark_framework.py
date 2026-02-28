@@ -399,11 +399,15 @@ class BenchmarkFramework:
             return {key: self._make_json_compatible(value) for key, value in obj.items()}
         elif isinstance(obj, list):
             return [self._make_json_compatible(item) for item in obj]
-        elif isinstance(obj, np.float64) or isinstance(obj, np.float32):
+        elif isinstance(obj, (np.float64, np.float32)):
             return float(obj)
-        elif isinstance(obj, np.int64) or isinstance(obj, np.int32):
+        elif isinstance(obj, (np.int64, np.int32)):
             return int(obj)
+        elif isinstance(obj, (np.bool_, np.bool8, bool)):
+            return bool(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
+        elif hasattr(obj, 'item'):  # Handle other numpy scalars
+            return obj.item()
         else:
             return obj
