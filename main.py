@@ -70,10 +70,11 @@ def main():
     print(f"Output file: {args.output}")
     print()
     
-    # Initialize benchmark framework
+    # Initialize benchmark framework with only requested methods
     framework = BenchmarkFramework(
         use_lambda_simulation=args.use_lambda,
-        enable_statistical_analysis=args.enable_statistics
+        enable_statistical_analysis=args.enable_statistics,
+        methods=args.methods
     )
     
     # Run comprehensive benchmark

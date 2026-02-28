@@ -39,7 +39,7 @@ class BenchmarkResult:
 
 
 class BenchmarkFramework:
-    def __init__(self, use_lambda_simulation: bool = True, enable_statistical_analysis: bool = True):
+    def __init__(self, use_lambda_simulation: bool = True, enable_statistical_analysis: bool = True, methods: Optional[List[str]] = None):
         self.use_lambda_simulation = use_lambda_simulation
         self.enable_statistical_analysis = enable_statistical_analysis
         self.summarizers = {}  # Will store lazy initializers
@@ -48,7 +48,8 @@ class BenchmarkFramework:
         self.results = []
         self.statistical_analyzer = StatisticalAnalyzer() if enable_statistical_analysis else None
         
-        self._register_summarizer_factories()
+        # Only register methods that are requested
+        self._register_summarizer_factories(methods)
     
     def _clear_cuda_memory(self):
         """Clear CUDA memory with aggressive cleanup and delays."""
@@ -71,36 +72,65 @@ class BenchmarkFramework:
             
             print(f"🔧 CUDA memory cleared - Allocated: {allocated:.2f}GB, Cached: {cached:.2f}GB")
 
-    def _register_summarizer_factories(self):
-        """Register factory functions for lazy initialization."""
-        # Lightweight models (no GPU)
-        self.summarizers = {
+    def _register_summarizer_factories(self, requested_methods: Optional[List[str]] = None):
+        """Register factory functions for lazy initialization - only for requested methods."""
+        
+        # Define all available methods
+        all_methods = {
+            # Lightweight models (no GPU)
             'textrank': lambda: TextRankSummarizer(),
             'tfidfrank': lambda: TFIDFRankSummarizer(),
-        }
-        
-        # GPU models ordered by size (small to large)
-        self.summarizers.update({
+            
+            # GPU models ordered by size (small to large)
             'distilbart': lambda: DistilBARTSummarizer(),
             't5': lambda: T5Summarizer(),
             'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
             'Retrieval-Augmented-Summarizer': lambda: RetrievalAugmentedSummarizer(),
             'LongformerEncoderDecoder': lambda: LongformerEncoderDecoderSummarizer(),
             'Pegasus-X': lambda: PegasusXSummarizer(),
-        })
+        }
         
-        # API-based models
-        try:
-            self.summarizers['gemini'] = lambda: GeminiSummarizer()
-            self.summarizers['hybrid_textrank_gemini'] = lambda: HybridTextRankGeminiSummarizer()
-            self.summarizers['hybrid_tfidfrank_gemini'] = lambda: HybridTFIDFRankGeminiSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not register Gemini-based summarizers: {e}")
+        # If no methods specified, register all methods
+        if requested_methods is None:
+            self.summarizers = all_methods.copy()
+        else:
+            # Only register requested methods
+            self.summarizers = {}
+            for method in requested_methods:
+                if method in all_methods:
+                    self.summarizers[method] = all_methods[method]
+                    print(f"✅ Registered {method}")
         
-        try:
-            self.summarizers['GPT-5-mini'] = lambda: GPT5MiniSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not register GPT-5-mini summarizer: {e}")
+        # API-based models - only register if requested
+        if requested_methods is None or 'gemini' in requested_methods:
+            try:
+                self.summarizers['gemini'] = lambda: GeminiSummarizer()
+                print("✅ Registered gemini")
+            except Exception as e:
+                print(f"Warning: Could not register Gemini summarizer: {e}")
+        
+        if requested_methods is None or 'hybrid_textrank_gemini' in requested_methods:
+            try:
+                self.summarizers['hybrid_textrank_gemini'] = lambda: HybridTextRankGeminiSummarizer()
+                print("✅ Registered hybrid_textrank_gemini")
+            except Exception as e:
+                print(f"Warning: Could not register hybrid_textrank_gemini: {e}")
+                
+        if requested_methods is None or 'hybrid_tfidfrank_gemini' in requested_methods:
+            try:
+                self.summarizers['hybrid_tfidfrank_gemini'] = lambda: HybridTFIDFRankGeminiSummarizer()
+                print("✅ Registered hybrid_tfidfrank_gemini")
+            except Exception as e:
+                print(f"Warning: Could not register hybrid_tfidfrank_gemini: {e}")
+        
+        if requested_methods is None or 'GPT-5-mini' in requested_methods:
+            try:
+                self.summarizers['GPT-5-mini'] = lambda: GPT5MiniSummarizer()
+                print("✅ Registered GPT-5-mini")
+            except Exception as e:
+                print(f"Warning: Could not register GPT-5-mini: {e}")
+                
+        print(f"📋 Total methods registered: {len(self.summarizers)}")
     
     def _load_model_on_demand(self, method_name: str):
         """Load a model on-demand and cache it."""
