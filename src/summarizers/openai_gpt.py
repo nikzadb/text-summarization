@@ -116,10 +116,10 @@ Summary:"""
                     "format": {
                         "type": "text"
                     },
-                    "verbosity": "medium"
+                    "verbosity": "low"
                 },
                 reasoning={
-                    "effort": "medium"
+                    "effort": "low"
                 },
                 tools=[],
                 store=True,
