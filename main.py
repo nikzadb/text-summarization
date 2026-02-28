@@ -30,7 +30,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Text Summarization Benchmarking Tool')
     parser.add_argument('--datasets', nargs='+', default=['cnn_dailymail'], 
-                       choices=['cnn_dailymail', 'arxiv', 'wikihow', 'govreport', 'samsum', 'qmsum', 'mediasum', 'callsum'],
+                       choices=['cnn_dailymail', 'arxiv', 'wikihow', 'govreport', 'mediasum'], #, 'samsum', 'qmsum', 'callsum'],
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
                        default=['textrank', 'tfidfrank', 
