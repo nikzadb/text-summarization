@@ -42,59 +42,137 @@ class BenchmarkFramework:
     def __init__(self, use_lambda_simulation: bool = True, enable_statistical_analysis: bool = True):
         self.use_lambda_simulation = use_lambda_simulation
         self.enable_statistical_analysis = enable_statistical_analysis
-        self.summarizers = {}
+        self.summarizers = {}  # Will store lazy initializers
+        self.loaded_models = {}  # Will store actual loaded models
         self.evaluator = EvaluationMetrics()
         self.results = []
         self.statistical_analyzer = StatisticalAnalyzer() if enable_statistical_analysis else None
         
-        self._initialize_summarizers()
+        self._register_summarizer_factories()
     
     def _clear_cuda_memory(self):
-        """Clear CUDA memory between model loads."""
+        """Clear CUDA memory with aggressive cleanup and delays."""
         if HAS_TORCH and torch.cuda.is_available():
+            # Synchronize all operations
+            torch.cuda.synchronize()
+            
+            # Clear cache multiple times
             torch.cuda.empty_cache()
             gc.collect()
-            print(f"🔧 CUDA memory cleared")
+            time.sleep(1)  # Wait for cleanup
+            
+            torch.cuda.empty_cache()
+            gc.collect() 
+            time.sleep(0.5)  # Additional wait
+            
+            # Get current memory usage
+            allocated = torch.cuda.memory_allocated() / (1024**3)  # GB
+            cached = torch.cuda.memory_reserved() / (1024**3)  # GB
+            
+            print(f"🔧 CUDA memory cleared - Allocated: {allocated:.2f}GB, Cached: {cached:.2f}GB")
 
-    def _initialize_summarizers(self):
-        # Initialize lightweight models first
+    def _register_summarizer_factories(self):
+        """Register factory functions for lazy initialization."""
+        # Lightweight models (no GPU)
         self.summarizers = {
-            'textrank': TextRankSummarizer(),
-            'tfidfrank': TFIDFRankSummarizer(),
+            'textrank': lambda: TextRankSummarizer(),
+            'tfidfrank': lambda: TFIDFRankSummarizer(),
         }
         
-        # Initialize neural models one by one with memory management
-        neural_models = [
-            ('distilbart', lambda: DistilBARTSummarizer()),
-            ('bart', lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn')),
-            ('t5', lambda: T5Summarizer()),
-            ('Pegasus-X', lambda: PegasusXSummarizer()),
-            ('LongformerEncoderDecoder', lambda: LongformerEncoderDecoderSummarizer()),
-            ('Retrieval-Augmented-Summarizer', lambda: RetrievalAugmentedSummarizer()),
-        ]
+        # GPU models ordered by size (small to large)
+        self.summarizers.update({
+            'distilbart': lambda: DistilBARTSummarizer(),
+            't5': lambda: T5Summarizer(),
+            'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
+            'Retrieval-Augmented-Summarizer': lambda: RetrievalAugmentedSummarizer(),
+            'LongformerEncoderDecoder': lambda: LongformerEncoderDecoderSummarizer(),
+            'Pegasus-X': lambda: PegasusXSummarizer(),
+        })
         
-        for name, model_func in neural_models:
-            try:
-                self._clear_cuda_memory()  # Clear memory before each model
-                print(f"🔄 Initializing {name}...")
-                self.summarizers[name] = model_func()
-                print(f"✅ {name} initialized successfully")
-            except Exception as e:
-                print(f"⚠️  Could not initialize {name}: {e}")
-                # Clear memory even after failure
+        # API-based models
+        try:
+            self.summarizers['gemini'] = lambda: GeminiSummarizer()
+            self.summarizers['hybrid_textrank_gemini'] = lambda: HybridTextRankGeminiSummarizer()
+            self.summarizers['hybrid_tfidfrank_gemini'] = lambda: HybridTFIDFRankGeminiSummarizer()
+        except Exception as e:
+            print(f"Warning: Could not register Gemini-based summarizers: {e}")
+        
+        try:
+            self.summarizers['GPT-5-mini'] = lambda: GPT5MiniSummarizer()
+        except Exception as e:
+            print(f"Warning: Could not register GPT-5-mini summarizer: {e}")
+    
+    def _load_model_on_demand(self, method_name: str):
+        """Load a model on-demand and cache it."""
+        if method_name in self.loaded_models:
+            return self.loaded_models[method_name]
+            
+        if method_name not in self.summarizers:
+            raise ValueError(f"Unknown method: {method_name}")
+        
+        # Determine if this is a GPU model
+        gpu_models = {'distilbart', 't5', 'bart', 'Retrieval-Augmented-Summarizer', 
+                     'LongformerEncoderDecoder', 'Pegasus-X'}
+        is_gpu_model = method_name in gpu_models
+        
+        if is_gpu_model:
+            # Clear GPU memory before loading
+            self._clear_cuda_memory()
+            print(f"🔄 Loading GPU model {method_name}...")
+        else:
+            print(f"🔄 Loading lightweight model {method_name}...")
+        
+        try:
+            # Load the model using the factory function
+            model = self.summarizers[method_name]()
+            self.loaded_models[method_name] = model
+            
+            if is_gpu_model:
+                print(f"✅ {method_name} loaded successfully on GPU")
+                # Add delay after loading GPU model
+                time.sleep(2)
+            else:
+                print(f"✅ {method_name} loaded successfully")
+                
+            return model
+            
+        except Exception as e:
+            print(f"❌ Failed to load {method_name}: {e}")
+            if is_gpu_model:
                 self._clear_cuda_memory()
+            raise
+    
+    def _unload_model(self, method_name: str):
+        """Unload a model and free GPU memory."""
+        if method_name not in self.loaded_models:
+            return
+            
+        # Determine if this is a GPU model
+        gpu_models = {'distilbart', 't5', 'bart', 'Retrieval-Augmented-Summarizer', 
+                     'LongformerEncoderDecoder', 'Pegasus-X'}
+        is_gpu_model = method_name in gpu_models
         
-        try:
-            self.summarizers['gemini'] = GeminiSummarizer()
-            self.summarizers['hybrid_textrank_gemini'] = HybridTextRankGeminiSummarizer()
-            self.summarizers['hybrid_tfidfrank_gemini'] = HybridTFIDFRankGeminiSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize Gemini-based summarizers: {e}")
+        # Call cleanup method if available
+        model = self.loaded_models[method_name]
+        if hasattr(model, 'cleanup'):
+            try:
+                model.cleanup()
+                print(f"🧹 Cleaned up {method_name} model weights")
+            except Exception as e:
+                print(f"⚠️  Error cleaning up {method_name}: {e}")
         
-        try:
-            self.summarizers['GPT-5-mini'] = GPT5MiniSummarizer()
-        except Exception as e:
-            print(f"Warning: Could not initialize GPT-5-mini summarizer: {e}")
+        # Remove the model from memory
+        del self.loaded_models[method_name]
+        
+        if is_gpu_model:
+            # Aggressive cleanup for GPU models
+            self._clear_cuda_memory()
+            print(f"🗑️  Unloaded GPU model {method_name}")
+            # Add delay after unloading
+            time.sleep(2)
+        else:
+            print(f"🗑️  Unloaded {method_name}")
+            gc.collect()
     
     def benchmark_method(self, 
                         method_name: str, 
@@ -105,7 +183,8 @@ class BenchmarkFramework:
         if method_name not in self.summarizers:
             raise ValueError(f"Unknown method: {method_name}")
         
-        summarizer = self.summarizers[method_name]
+        # Load model on-demand
+        summarizer = self._load_model_on_demand(method_name)
         # Configure summarizer for dataset-specific regime (e.g., Hybrid extraction sentence count)
         if hasattr(summarizer, "set_dataset") and callable(getattr(summarizer, "set_dataset")):
             try:
@@ -198,6 +277,9 @@ class BenchmarkFramework:
         
         # Save intermediate results after each method
         self._save_intermediate_results()
+        
+        # Unload model to free GPU memory for next method
+        self._unload_model(method_name)
         
         return result
     

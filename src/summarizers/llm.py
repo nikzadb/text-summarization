@@ -1,5 +1,6 @@
 import time
 import torch
+import gc
 from typing import Dict, Any
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from .traditional import BaseSummarizer
@@ -16,26 +17,16 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
     
     def _load_model(self):
         try:
-            # Check for GPU support (CUDA or MPS)
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-            print(f"Using device: {device}")
+            # GPU-only loading - no CPU fallback
+            if not torch.cuda.is_available():
+                raise RuntimeError(f"CUDA required for {self.model_name} but not available")
+            
+            device = "cuda"
+            print(f"Loading {self.model_name} on GPU: {device}")
             
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
-            
-            # Try CUDA first, fallback to CPU if OOM
-            try:
-                self.model = self.model.to(device)
-            except torch.cuda.OutOfMemoryError:
-                print(f"⚠️  CUDA OOM for {self.model_name}, falling back to CPU")
-                device = "cpu"
-                torch.cuda.empty_cache()  # Clear CUDA memory
-                self.model = self.model.to(device)
+            self.model = self.model.to(device)
             
             # Try different pipeline tasks based on model type
             try:
@@ -94,6 +85,39 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
     
     def get_cost(self) -> float:
         return 0.0
+    
+    def cleanup(self):
+        """Explicitly unload model from GPU memory."""
+        if hasattr(self, 'model') and self.model is not None:
+            del self.model
+            self.model = None
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            del self.tokenizer  
+            self.tokenizer = None
+        
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        gc.collect()
+    
+    def cleanup(self):
+        """Explicitly unload model from GPU memory."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.tokenizer is not None:
+            del self.tokenizer  
+            self.tokenizer = None
+        if self.pipeline is not None:
+            del self.pipeline
+            self.pipeline = None
+        
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        gc.collect()
 
 
 class RetrievalAugmentedSummarizer(BaseSummarizer):
@@ -129,17 +153,14 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
         self._load_models()
     
     def _load_models(self):
-        """Load both the sentence-transformer and LED generation models."""
+        """Load both the sentence-transformer and LED generation models on GPU only."""
         try:
-            # Determine device
-            if torch.cuda.is_available():
-                self.device = "cuda"
-            elif torch.backends.mps.is_available():
-                self.device = "mps"  
-            else:
-                self.device = "cpu"
+            # GPU-only loading - no fallback
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA required for Retrieval-Augmented-Summarizer but not available")
             
-            print(f"Loading Retrieval-Augmented-Summarizer components on device: {self.device}")
+            self.device = "cuda"
+            print(f"Loading Retrieval-Augmented-Summarizer components on GPU: {self.device}")
             
             # Load sentence-transformer for embeddings
             try:
@@ -162,7 +183,7 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
                         self.pipeline = pipeline(
                             task,
                             model=self.generation_model_name,
-                            device=self.device if self.device != "mps" else "cpu",
+                            device=self.device,
                             framework="pt"
                         )
                         print(f"✓ Loaded generation model with {task}: {self.generation_model_name}")
@@ -407,6 +428,34 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
     def get_cost(self) -> float:
         """Retrieval-augmented method has minimal cost (open-source models)."""
         return 0.0
+    
+    def cleanup(self):
+        """Explicitly unload all models from GPU memory."""
+        # Cleanup sentence transformer
+        if hasattr(self, 'sentence_model') and self.sentence_model is not None:
+            del self.sentence_model
+            self.sentence_model = None
+            
+        # Cleanup LED model
+        if hasattr(self, 'led_model') and self.led_model is not None:
+            del self.led_model
+            self.led_model = None
+            
+        # Cleanup LED tokenizer
+        if hasattr(self, 'led_tokenizer') and self.led_tokenizer is not None:
+            del self.led_tokenizer
+            self.led_tokenizer = None
+            
+        # Cleanup LED pipeline
+        if hasattr(self, 'led_pipeline') and self.led_pipeline is not None:
+            del self.led_pipeline
+            self.led_pipeline = None
+        
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        gc.collect()
 
 
 class T5Summarizer(OpenSourceLLMSummarizer):
@@ -417,14 +466,12 @@ class T5Summarizer(OpenSourceLLMSummarizer):
     
     def _load_model(self):
         try:
-            # Check for GPU support (CUDA or MPS)
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-            print(f"Using device for T5: {device}")
+            # GPU-only loading - no CPU fallback
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA required for T5 but not available")
+            
+            device = "cuda"
+            print(f"Loading T5 on GPU: {device}")
             
             # Try new transformers API first (text2text-generation for T5)
             try:
@@ -546,14 +593,12 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
     
     def _load_model(self):
         try:
-            # Check for GPU support (CUDA or MPS)
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-            print(f"Using device for LongformerEncoderDecoder: {device}")
+            # GPU-only loading - no CPU fallback
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA required for LongformerEncoderDecoder but not available")
+            
+            device = "cuda"
+            print(f"Loading LongformerEncoderDecoder on GPU: {device}")
             
             # Try multiple Longformer model approaches
             from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -588,19 +633,7 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
                 
         except Exception as e:
             print(f"Error loading LongformerEncoderDecoder model: {e}")
-            print("Falling back to manual model loading...")
-            # Fallback to manual model loading (no pipeline)
-            try:
-                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-                self.tokenizer = AutoTokenizer.from_pretrained("facebook/bart-base")
-                self.model = AutoModelForSeq2SeqLM.from_pretrained("facebook/bart-base")
-                self.model = self.model.to("cpu")
-                self.device = "cpu"
-                self.actual_model_name = "facebook/bart-base"
-                print("✓ Fallback to BART manual loading successful")
-            except Exception as fallback_error:
-                print(f"Fallback also failed: {fallback_error}")
-                raise
+            raise
     
     def _get_domain_preferred_models(self):
         """Get prioritized model list based on domain preference."""
@@ -710,3 +743,18 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
     
     def get_cost(self) -> float:
         return 0.0
+    
+    def cleanup(self):
+        """Explicitly unload model from GPU memory."""
+        if hasattr(self, 'model') and self.model is not None:
+            del self.model
+            self.model = None
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            del self.tokenizer  
+            self.tokenizer = None
+        
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        gc.collect()
