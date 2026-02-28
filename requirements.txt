@@ -17,3 +17,4 @@ seaborn==0.13.0
 tqdm==4.66.1
 python-dotenv==1.0.0
 nltk==3.8.1
+openai==2.24.0
