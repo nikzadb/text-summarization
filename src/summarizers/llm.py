@@ -244,6 +244,8 @@ class LongformerEncoderDecoderSummarizer(BaseSummarizer):
         
         # Get domain-specific models or default to general
         domain = self.prefer_domain or 'general'
+
+        # Use general checkpint regardless of the dataset domain type
         # preferred_models = domain_models.get(domain, domain_models['general'])
         preferred_models = "allenai/led-large-16384"
         
