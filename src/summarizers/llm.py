@@ -29,13 +29,28 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
             self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
             self.model = self.model.to(device)
             
-            self.pipeline = pipeline(
-                "summarization", 
-                model=self.model, 
-                tokenizer=self.tokenizer,
-                device=device,
-                framework="pt"
-            )
+            # Try different pipeline tasks based on model type
+            try:
+                self.pipeline = pipeline(
+                    "text2text-generation", 
+                    model=self.model, 
+                    tokenizer=self.tokenizer,
+                    device=device,
+                    framework="pt"
+                )
+            except Exception:
+                # Fallback to summarization for older transformers or BART models
+                try:
+                    self.pipeline = pipeline(
+                        "summarization", 
+                        model=self.model, 
+                        tokenizer=self.tokenizer,
+                        device=device,
+                        framework="pt"
+                    )
+                except Exception:
+                    # Use manual generation
+                    self.pipeline = None
         except Exception as e:
             print(f"Error loading model {self.model_name}: {e}")
             raise
@@ -55,7 +70,16 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
                 do_sample=False,
                 truncation=True
             )
-            return result[0]['summary_text']
+            # Handle different output formats
+            if isinstance(result, list) and len(result) > 0:
+                if 'generated_text' in result[0]:
+                    return result[0]['generated_text']
+                elif 'summary_text' in result[0]:
+                    return result[0]['summary_text']
+                else:
+                    # Take the first value if structure is different
+                    return str(list(result[0].values())[0])
+            return str(result)
         except Exception as e:
             sentences = text.split('.')[:max_sentences]
             return '. '.join(sentences) + '.'
@@ -121,13 +145,24 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
             # Load LED model for generation
             try:
                 from transformers import pipeline
-                self.pipeline = pipeline(
-                    "summarization",
-                    model=self.generation_model_name,
-                    device=self.device if self.device != "mps" else "cpu",  # Pipeline may not support MPS
-                    framework="pt"
-                )
-                print(f"✓ Loaded generation model: {self.generation_model_name}")
+                # Try text2text-generation first for newer transformers
+                try:
+                    self.pipeline = pipeline(
+                        "text2text-generation",
+                        model=self.generation_model_name,
+                        device=self.device if self.device != "mps" else "cpu",  # Pipeline may not support MPS
+                        framework="pt"
+                    )
+                    print(f"✓ Loaded generation model with text2text-generation: {self.generation_model_name}")
+                except Exception:
+                    # Fallback to summarization task
+                    self.pipeline = pipeline(
+                        "summarization",
+                        model=self.generation_model_name,
+                        device=self.device if self.device != "mps" else "cpu",
+                        framework="pt"
+                    )
+                    print(f"✓ Loaded generation model with summarization: {self.generation_model_name}")
             except Exception as gen_error:
                 print(f"⚠️  Failed to load generation model as pipeline: {gen_error}")
                 # Try manual loading
@@ -292,7 +327,16 @@ class RetrievalAugmentedSummarizer(BaseSummarizer):
                     truncation=True,
                     do_sample=False
                 )
-                return result[0]['summary_text']
+                # Handle different output formats
+                if isinstance(result, list) and len(result) > 0:
+                    if 'generated_text' in result[0]:
+                        return result[0]['generated_text']
+                    elif 'summary_text' in result[0]:
+                        return result[0]['summary_text']
+                    else:
+                        # Take the first value if structure is different
+                        return str(list(result[0].values())[0])
+                return str(result)
                 
             elif self.generation_model and self.tokenizer:
                 # Use model directly
@@ -361,34 +405,82 @@ class T5Summarizer(OpenSourceLLMSummarizer):
                 device = "cpu"
             print(f"Using device for T5: {device}")
             
-            self.pipeline = pipeline(
-                "summarization", 
-                model=self.model_name,
-                device=device,
-                framework="pt"
-            )
+            # Try new transformers API first (text2text-generation for T5)
+            try:
+                self.pipeline = pipeline(
+                    "text2text-generation", 
+                    model=self.model_name,
+                    device=device,
+                    framework="pt"
+                )
+                print(f"✓ Loaded T5 with text2text-generation pipeline")
+            except Exception:
+                # Fallback to manual loading for T5
+                from transformers import T5Tokenizer, T5ForConditionalGeneration
+                self.tokenizer = T5Tokenizer.from_pretrained(self.model_name)
+                self.model = T5ForConditionalGeneration.from_pretrained(self.model_name)
+                self.model = self.model.to(device)
+                self.device = device
+                self.pipeline = None  # Use manual generation
+                print(f"✓ Loaded T5 manually")
+                
         except Exception as e:
             print(f"Error loading T5 model: {e}")
             raise
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
-        if not self.pipeline:
-            raise RuntimeError("Model not loaded")
-        
         prefixed_text = f"summarize: {text}"
         max_length = max_sentences * 30
         min_length = max_sentences * 10
         
         try:
-            result = self.pipeline(
-                prefixed_text,
-                max_length=max_length,
-                min_length=min_length,
-                do_sample=False,
-                truncation=True
-            )
-            return result[0]['summary_text']
+            if self.pipeline:
+                # Use pipeline (text2text-generation)
+                result = self.pipeline(
+                    prefixed_text,
+                    max_length=max_length,
+                    min_length=min_length,
+                    do_sample=False,
+                    truncation=True
+                )
+                # Handle different output formats
+                if isinstance(result, list) and len(result) > 0:
+                    if 'generated_text' in result[0]:
+                        return result[0]['generated_text']
+                    elif 'summary_text' in result[0]:
+                        return result[0]['summary_text']
+                    else:
+                        # Take the first value if structure is different
+                        return str(list(result[0].values())[0])
+                return str(result)
+                
+            elif hasattr(self, 'model') and hasattr(self, 'tokenizer'):
+                # Use manual generation
+                inputs = self.tokenizer(
+                    prefixed_text,
+                    return_tensors="pt",
+                    max_length=512,
+                    truncation=True
+                )
+                inputs = inputs.to(self.device)
+                
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        inputs.input_ids,
+                        max_length=max_length,
+                        min_length=min_length,
+                        num_beams=4,
+                        early_stopping=True,
+                        do_sample=False
+                    )
+                
+                summary = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                return summary
+            else:
+                raise RuntimeError("Neither pipeline nor manual model available")
+                
         except Exception as e:
+            print(f"T5 summarization failed: {e}")
             sentences = text.split('.')[:max_sentences]
             return '. '.join(sentences) + '.'
 
