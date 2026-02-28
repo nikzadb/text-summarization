@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
-from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer, PegasusXSummarizer, LongformerEncoderDecoderSummarizer
+from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer, PegasusXSummarizer, RetrievalAugmentedSummarizer, LongformerEncoderDecoderSummarizer
 from .summarizers.gemini import GeminiSummarizer, HybridTFIDFRankGeminiSummarizer, HybridTextRankGeminiSummarizer
 from .dataset_loader import DatasetLoader
 from .evaluation_metrics import EvaluationMetrics
@@ -49,7 +49,8 @@ class BenchmarkFramework:
             'distilbart': DistilBARTSummarizer(),
             'bart': OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
             'Pegasus-X': PegasusXSummarizer(),
-            'LongformerEncoderDecoder': LongformerEncoderDecoderSummarizer()
+            'LongformerEncoderDecoder': LongformerEncoderDecoderSummarizer(),
+            'Retrieval-Augmented-Summarizer': RetrievalAugmentedSummarizer()
         }
         
         try:

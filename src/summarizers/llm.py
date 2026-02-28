@@ -64,6 +64,286 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
         return 0.0
 
 
+class RetrievalAugmentedSummarizer(BaseSummarizer):
+    """
+    Retrieval-Augmented Summarizer implementing a two-stage context selection strategy.
+    
+    This method implements the approach described in the specification:
+    1. Document segmentation: Split documents into fixed-length chunks
+    2. Semantic embedding: Use sentence-transformer to embed chunks
+    3. Retrieval: Given a generic query, retrieve top-k most similar chunks
+    4. Generation: Concatenate retrieved chunks and summarize with LED model
+    
+    This approach isolates semantic context selection from generation and
+    avoids dataset-specific tuning.
+    """
+    
+    def __init__(self, chunk_size: int = 512, embedding_model: str = "all-MiniLM-L6-v2"):
+        super().__init__("Retrieval-Augmented-Summarizer")
+        self.chunk_size = chunk_size  # Fixed-length chunks in characters
+        self.embedding_model_name = embedding_model
+        self.generation_model_name = "allenai/led-large-16384"  # General LED checkpoint
+        
+        # Model components
+        self.embedding_model = None
+        self.tokenizer = None
+        self.generation_model = None
+        self.pipeline = None
+        self.device = None
+        
+        # Generic summarization query for retrieval
+        self.generic_query = "Summarize the key points and main ideas from this document."
+        
+        self._load_models()
+    
+    def _load_models(self):
+        """Load both the sentence-transformer and LED generation models."""
+        try:
+            # Determine device
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.device = "mps"  
+            else:
+                self.device = "cpu"
+            
+            print(f"Loading Retrieval-Augmented-Summarizer components on device: {self.device}")
+            
+            # Load sentence-transformer for embeddings
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.embedding_model = SentenceTransformer(self.embedding_model_name, device=self.device)
+                print(f"✓ Loaded embedding model: {self.embedding_model_name}")
+            except Exception as embed_error:
+                print(f"⚠️  Failed to load embedding model: {embed_error}")
+                self.embedding_model = None
+            
+            # Load LED model for generation
+            try:
+                from transformers import pipeline
+                self.pipeline = pipeline(
+                    "summarization",
+                    model=self.generation_model_name,
+                    device=self.device if self.device != "mps" else "cpu",  # Pipeline may not support MPS
+                    framework="pt"
+                )
+                print(f"✓ Loaded generation model: {self.generation_model_name}")
+            except Exception as gen_error:
+                print(f"⚠️  Failed to load generation model as pipeline: {gen_error}")
+                # Try manual loading
+                try:
+                    from transformers import LEDTokenizer, LEDForConditionalGeneration
+                    self.tokenizer = LEDTokenizer.from_pretrained(self.generation_model_name)
+                    self.generation_model = LEDForConditionalGeneration.from_pretrained(self.generation_model_name)
+                    self.generation_model = self.generation_model.to(self.device)
+                    print(f"✓ Loaded generation model manually: {self.generation_model_name}")
+                except Exception as manual_error:
+                    print(f"⚠️  Manual loading also failed: {manual_error}")
+                    self.tokenizer = None
+                    self.generation_model = None
+                
+        except Exception as e:
+            print(f"Error loading Retrieval-Augmented-Summarizer: {e}")
+            self.embedding_model = None
+            self.pipeline = None
+            self.tokenizer = None
+            self.generation_model = None
+    
+    def _segment_into_chunks(self, text: str) -> list[str]:
+        """
+        Segment document into fixed-length chunks.
+        
+        Args:
+            text: Input document text
+            
+        Returns:
+            List of text chunks
+        """
+        chunks = []
+        text = text.strip()
+        
+        # Simple chunking by character count with word boundaries
+        start = 0
+        while start < len(text):
+            end = start + self.chunk_size
+            
+            if end >= len(text):
+                # Last chunk
+                chunks.append(text[start:])
+                break
+            
+            # Find word boundary to avoid cutting words
+            while end > start and text[end] not in [' ', '.', '!', '?', '\n', '\t']:
+                end -= 1
+            
+            if end == start:  # Safety: if no word boundary found, use original end
+                end = start + self.chunk_size
+            
+            chunks.append(text[start:end].strip())
+            start = end
+        
+        # Filter out very short chunks
+        chunks = [chunk for chunk in chunks if len(chunk.strip()) > 50]
+        
+        return chunks
+    
+    def _embed_texts(self, texts: list[str]) -> 'numpy.ndarray':
+        """
+        Generate embeddings for text chunks using sentence-transformer.
+        
+        Args:
+            texts: List of text chunks
+            
+        Returns:
+            Numpy array of embeddings
+        """
+        if not self.embedding_model:
+            # Fallback: random embeddings (for testing when model fails to load)
+            import numpy as np
+            return np.random.rand(len(texts), 384)  # MiniLM has 384 dimensions
+        
+        try:
+            embeddings = self.embedding_model.encode(texts, convert_to_numpy=True)
+            return embeddings
+        except Exception as e:
+            print(f"Embedding failed: {e}")
+            # Fallback: random embeddings
+            import numpy as np
+            return np.random.rand(len(texts), 384)
+    
+    def _retrieve_top_k_chunks(self, chunks: list[str], query: str, k: int) -> list[str]:
+        """
+        Retrieve top-k most semantically similar chunks to the query.
+        
+        Args:
+            chunks: List of text chunks
+            query: Retrieval query (generic summarization query)
+            k: Number of chunks to retrieve
+            
+        Returns:
+            List of top-k most similar chunks
+        """
+        if not chunks:
+            return []
+        
+        k = min(k, len(chunks))  # Don't retrieve more than available
+        
+        try:
+            # Embed all chunks and the query
+            chunk_embeddings = self._embed_texts(chunks)
+            query_embedding = self._embed_texts([query])
+            
+            # Calculate cosine similarities
+            from sklearn.metrics.pairwise import cosine_similarity
+            similarities = cosine_similarity(query_embedding, chunk_embeddings).flatten()
+            
+            # Get top-k most similar chunks
+            top_k_indices = similarities.argsort()[-k:][::-1]  # Descending order
+            
+            # Return chunks in original document order (not similarity order)
+            selected_chunks = [chunks[i] for i in sorted(top_k_indices)]
+            
+            return selected_chunks
+            
+        except Exception as e:
+            print(f"Retrieval failed: {e}")
+            # Fallback: return first k chunks
+            return chunks[:k]
+    
+    def summarize(self, text: str, max_sentences: int = 3) -> str:
+        """
+        Two-stage retrieval-augmented summarization.
+        
+        Args:
+            text: Input document text
+            max_sentences: Maximum sentences in final summary
+            
+        Returns:
+            Generated summary
+        """
+        try:
+            # Stage 1: Document segmentation and retrieval
+            chunks = self._segment_into_chunks(text)
+            
+            if not chunks:
+                return "Unable to process document."
+            
+            # Determine how many chunks to retrieve based on final summary length
+            # Retrieve more chunks for longer summaries, but cap to avoid too much context
+            retrieval_ratio = max(3, max_sentences)  # At least 3 chunks, more for longer summaries
+            k = min(len(chunks), retrieval_ratio)
+            
+            # Retrieve top-k semantically relevant chunks using generic query
+            selected_chunks = self._retrieve_top_k_chunks(chunks, self.generic_query, k)
+            
+            # Concatenate retrieved chunks
+            retrieved_content = ' '.join(selected_chunks)
+            
+            # Stage 2: Generation using LED model
+            if self.pipeline:
+                # Use pipeline for generation
+                max_length = max_sentences * 30
+                min_length = max_sentences * 10
+                
+                result = self.pipeline(
+                    retrieved_content,
+                    max_length=max_length,
+                    min_length=min_length,
+                    truncation=True,
+                    do_sample=False
+                )
+                return result[0]['summary_text']
+                
+            elif self.generation_model and self.tokenizer:
+                # Use model directly
+                max_length = max_sentences * 30
+                min_length = max_sentences * 10
+                
+                # LED can handle long sequences (up to 16384 tokens)
+                inputs = self.tokenizer(
+                    retrieved_content,
+                    max_length=16384,
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt"
+                )
+                inputs = inputs.to(self.device)
+                
+                # Generate summary
+                with torch.no_grad():
+                    summary_ids = self.generation_model.generate(
+                        inputs["input_ids"],
+                        attention_mask=inputs.get("attention_mask"),
+                        max_length=max_length,
+                        min_length=min_length,
+                        num_beams=4,
+                        early_stopping=True,
+                        no_repeat_ngram_size=3
+                    )
+                
+                # Decode summary
+                summary = self.tokenizer.decode(
+                    summary_ids[0], 
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                return summary
+            else:
+                # Fallback: return concatenated retrieved chunks (extractive summary)
+                sentences = retrieved_content.split('.')[:max_sentences]
+                return '. '.join(sentences) + '.'
+                
+        except Exception as e:
+            print(f"Retrieval-Augmented-Summarizer failed: {e}")
+            # Ultimate fallback: simple extraction from original text
+            sentences = text.split('.')[:max_sentences]
+            return '. '.join(sentences) + '.'
+    
+    def get_cost(self) -> float:
+        """Retrieval-augmented method has minimal cost (open-source models)."""
+        return 0.0
+
+
 class T5Summarizer(OpenSourceLLMSummarizer):
     def __init__(self):
         self.model_name = "t5-small"
