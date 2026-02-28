@@ -59,13 +59,12 @@ class GPT5MiniSummarizer(BaseSummarizer):
         if not OPENAI_AVAILABLE:
             raise ImportError("OpenAI package not installed. Run: pip install openai")
         
-        if not self.api_key:
-            raise ValueError(
-                "OpenAI API key not provided. Set OPENAI_API_KEY environment variable or pass api_key parameter."
-            )
-        
         try:
-            self.client = openai.OpenAI(api_key=self.api_key)
+            # Initialize client using new OpenAI API pattern
+            if self.api_key:
+                self.client = openai.OpenAI(api_key=self.api_key)
+            else:
+                self.client = openai.OpenAI()  # Uses OPENAI_API_KEY from environment
             print(f"✓ OpenAI client initialized for {self.model_name}")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
@@ -99,7 +98,7 @@ Summary:"""
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         """
-        Synchronous summarization using OpenAI API.
+        Synchronous summarization using OpenAI responses API.
         """
         if not self.client:
             raise RuntimeError("OpenAI client not initialized")
@@ -107,20 +106,29 @@ Summary:"""
         prompt = self._create_prompt(text, max_sentences)
         
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.responses.create(
                 model=self.model_name,
-                messages=[
+                input=[
                     {"role": "system", "content": "You are an expert at creating concise, informative summaries."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=1.0,
-                frequency_penalty=0.0,
-                presence_penalty=0.0
+                text={
+                    "format": {
+                        "type": "text"
+                    },
+                    "verbosity": "medium"
+                },
+                reasoning={
+                    "effort": "medium"
+                },
+                tools=[],
+                store=True,
+                include=[
+                    "reasoning.encrypted_content"
+                ]
             )
             
-            return response.choices[0].message.content.strip()
+            return response.text.content.strip()
             
         except Exception as e:
             print(f"OpenAI API error: {e}")
@@ -137,20 +145,29 @@ Summary:"""
         prompt = self._create_prompt(text, max_sentences)
         
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.responses.create(
                 model=self.model_name,
-                messages=[
+                input=[
                     {"role": "system", "content": "You are an expert at creating concise, informative summaries."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=1.0,
-                frequency_penalty=0.0,
-                presence_penalty=0.0
+                text={
+                    "format": {
+                        "type": "text"
+                    },
+                    "verbosity": "medium"
+                },
+                reasoning={
+                    "effort": "medium"
+                },
+                tools=[],
+                store=True,
+                include=[
+                    "reasoning.encrypted_content"
+                ]
             )
             
-            summary = response.choices[0].message.content.strip()
+            summary = response.text.content.strip()
             
         except Exception as e:
             print(f"OpenAI API error: {e}")
