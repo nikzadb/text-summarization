@@ -116,3 +116,8 @@ class T5Summarizer(OpenSourceLLMSummarizer):
 class DistilBARTSummarizer(OpenSourceLLMSummarizer):
     def __init__(self):
         super().__init__("sshleifer/distilbart-cnn-12-6")
+
+
+class PegasusXSummarizer(OpenSourceLLMSummarizer):
+    def __init__(self):
+        super().__init__("google/pegasus-x-large")

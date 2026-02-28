@@ -33,8 +33,16 @@ def main():
                        choices=['cnn_dailymail', 'arxiv', 'wikihow', 'govreport', 'samsum', 'qmsum', 'mediasum', 'callsum'],
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
-                       default=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
-                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
+                       default=['textrank', 'tfidfrank', 
+                                 'distilbart', 'bart', 'Pegasus-X',             
+                                 'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
+                                 'gemini', 'GPT-5-mini'],
+                       choices=['textrank', 'tfidfrank', 
+                                't5', 'distilbart', 'bart', 
+                                'gemini', 'GPT-5-mini', 
+                                'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini',
+                                'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
+                                'Pegasus-X'],
                        help='Summarization methods to benchmark')
     parser.add_argument('--max-samples', type=int, default=0,
                        help='Maximum number of samples per dataset')
