@@ -45,6 +45,10 @@ class BaseSummarizer(ABC):
     
     def get_cost(self) -> float:
         return 0.0
+    
+    def cleanup(self):
+        """Clean up model resources (GPU/CPU memory, etc.)"""
+        pass
 
 
 

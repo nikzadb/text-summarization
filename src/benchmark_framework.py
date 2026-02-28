@@ -40,16 +40,22 @@ class BenchmarkFramework:
         self._initialize_summarizers()
     
     def _initialize_summarizers(self):
+        """Initialize only lightweight traditional methods at startup.
+        Heavy models will be loaded on-demand and cleaned up after use."""
         self.summarizers = {
             'textrank': TextRankSummarizer(),
             'tfidfrank': TFIDFRankSummarizer(),
-            'distilbart': DistilBARTSummarizer(),
-            'bart': OpenSourceLLMSummarizer('facebook/bart-large-cnn')
-            'gemini': GeminiSummarizer(),
-            'GPT-5-mini': GPT5MiniSummarizer(),
-            # 't5': T5Summarizer(),
-            # 'hybrid_textrank_gemini': HybridTextRankGeminiSummarizer(),
-            # 'hybrid_tfidfrank_gemini': HybridTFIDFRankGeminiSummarizer()
+        }
+        
+        # Define heavy models that require on-demand loading
+        self.heavy_model_classes = {
+            'distilbart': lambda: DistilBARTSummarizer(),
+            'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
+            't5': lambda: T5Summarizer(),
+            'gemini': lambda: GeminiSummarizer(),
+            'GPT-5-mini': lambda: GPT5MiniSummarizer(),
+            'hybrid_textrank_gemini': lambda: HybridTextRankGeminiSummarizer(),
+            'hybrid_tfidfrank_gemini': lambda: HybridTFIDFRankGeminiSummarizer()
         }
     
     def benchmark_method(self, 
@@ -58,10 +64,24 @@ class BenchmarkFramework:
                         dataset_name: str,
                         max_sentences: int = 3) -> BenchmarkResult:
         
-        if method_name not in self.summarizers:
+        # Check if method exists in either lightweight or heavy models
+        if method_name not in self.summarizers and method_name not in self.heavy_model_classes:
             raise ValueError(f"Unknown method: {method_name}")
         
-        summarizer = self.summarizers[method_name]
+        # Load model on-demand if it's a heavy model
+        summarizer = None
+        is_heavy_model = method_name in self.heavy_model_classes
+        
+        if is_heavy_model:
+            print(f"🔄 Loading {method_name} model...")
+            try:
+                summarizer = self.heavy_model_classes[method_name]()
+                print(f"✓ {method_name} model loaded successfully")
+            except Exception as e:
+                print(f"❌ Failed to load {method_name}: {e}")
+                raise
+        else:
+            summarizer = self.summarizers[method_name]
         # Configure summarizer for dataset-specific regime (e.g., Hybrid extraction sentence count)
         if hasattr(summarizer, "set_dataset") and callable(getattr(summarizer, "set_dataset")):
             try:
@@ -152,6 +172,22 @@ class BenchmarkFramework:
         
         self.results.append(result)
         
+        # Clean up heavy model resources after benchmarking
+        if is_heavy_model and summarizer:
+            print(f"🧹 Cleaning up {method_name} model...")
+            try:
+                summarizer.cleanup()
+                del summarizer
+                summarizer = None
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                print(f"✓ {method_name} cleanup completed")
+            except Exception as e:
+                print(f"Warning: Error during {method_name} cleanup: {e}")
+        
         # Save intermediate results after each method
         self._save_intermediate_results()
         
@@ -164,7 +200,7 @@ class BenchmarkFramework:
                                   max_sentences: int = 3) -> List[BenchmarkResult]:
         
         if methods is None:
-            methods = list(self.summarizers.keys())
+            methods = list(self.summarizers.keys()) + list(self.heavy_model_classes.keys())
         
         loader = DatasetLoader('benchmark')
         all_results = []
@@ -177,7 +213,7 @@ class BenchmarkFramework:
                 print(f"Dataset stats: {dataset_stats}")
                 
                 for method in methods:
-                    if method in self.summarizers:
+                    if method in self.summarizers or method in self.heavy_model_classes:
                         try:
                             result = self.benchmark_method(
                                 method, dataset_samples, dataset_name, max_sentences

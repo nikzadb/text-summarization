@@ -62,6 +62,34 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
     
     def get_cost(self) -> float:
         return 0.0
+    
+    def cleanup(self):
+        """Clean up model resources and free GPU/CPU memory"""
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                # Move model to CPU and delete
+                if hasattr(self.model, 'to'):
+                    self.model = self.model.to('cpu')
+                del self.model
+                self.model = None
+            
+            if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+                del self.tokenizer
+                self.tokenizer = None
+            
+            if hasattr(self, 'pipeline') and self.pipeline is not None:
+                del self.pipeline
+                self.pipeline = None
+            
+            # Clear GPU cache if available
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            
+            print(f"✓ Cleaned up {self.name} model resources")
+        except Exception as e:
+            print(f"Warning: Error during cleanup of {self.name}: {e}")
 
 
 class T5Summarizer(OpenSourceLLMSummarizer):

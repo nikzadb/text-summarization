@@ -175,3 +175,13 @@ Summary:"""
     def get_cost(self) -> float:
         """Return base cost (actual costs are calculated per request)."""
         return 0.0
+    
+    def cleanup(self):
+        """Clean up OpenAI client resources"""
+        try:
+            if hasattr(self, 'client') and self.client is not None:
+                del self.client
+                self.client = None
+            print(f"✓ Cleaned up {self.name} client resources")
+        except Exception as e:
+            print(f"Warning: Error during cleanup of {self.name}: {e}")

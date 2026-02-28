@@ -92,6 +92,16 @@ class GeminiSummarizer(BaseSummarizer):
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
         }
+    
+    def cleanup(self):
+        """Clean up Gemini model resources"""
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                del self.model
+                self.model = None
+            print(f"✓ Cleaned up {self.name} model resources")
+        except Exception as e:
+            print(f"Warning: Error during cleanup of {self.name}: {e}")
 
 
 class _HybridBase(BaseSummarizer):
