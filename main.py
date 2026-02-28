@@ -53,16 +53,11 @@ def main():
                        help='Use AWS Lambda simulation')
     parser.add_argument('--output', type=str, default='benchmark_results.csv',
                        help='Output file for results (csv or json)')
-    parser.add_argument('--gemini-api-key', type=str,
-                       help='Gemini API key (or set GEMINI_API_KEY env var)')
     parser.add_argument('--enable-statistics', action='store_true', default=True,
                        help='Enable comprehensive statistical analysis with bootstrap CI and significance tests')
     
     args = parser.parse_args()
     
-    # Set Gemini API key if provided
-    if args.gemini_api_key:
-        os.environ['GEMINI_API_KEY'] = args.gemini_api_key
     
     print("🔬 Text Summarization Benchmarking Tool")
     print("=" * 50)
