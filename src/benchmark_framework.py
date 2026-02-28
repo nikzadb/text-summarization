@@ -11,6 +11,7 @@ from .summarizers.gemini import GeminiSummarizer, HybridTFIDFRankGeminiSummarize
 from .dataset_loader import DatasetLoader
 from .evaluation_metrics import EvaluationMetrics
 from .lambda_simulation import LambdaSimulator
+from .statistical_analysis import StatisticalAnalyzer, combine_detailed_results
 
 
 @dataclass
@@ -30,11 +31,13 @@ class BenchmarkResult:
 
 
 class BenchmarkFramework:
-    def __init__(self, use_lambda_simulation: bool = True):
+    def __init__(self, use_lambda_simulation: bool = True, enable_statistical_analysis: bool = True):
         self.use_lambda_simulation = use_lambda_simulation
+        self.enable_statistical_analysis = enable_statistical_analysis
         self.summarizers = {}
         self.evaluator = EvaluationMetrics()
         self.results = []
+        self.statistical_analyzer = StatisticalAnalyzer() if enable_statistical_analysis else None
         
         self._initialize_summarizers()
     
@@ -261,3 +264,170 @@ class BenchmarkFramework:
             else:
                 best = df.loc[df[metric].idxmax()]
                 print(f"Best {metric}: {best['Method']} ({best[metric]:.4f})")
+    
+    def run_statistical_analysis(self, datasets: List[str], methods: List[str]) -> Dict[str, Any]:
+        """
+        Run comprehensive statistical analysis on benchmark results.
+        
+        Args:
+            datasets: List of dataset names
+            methods: List of method names
+            
+        Returns:
+            Dictionary with statistical analysis results per dataset
+        """
+        if not self.statistical_analyzer:
+            print("Statistical analysis is disabled.")
+            return {}
+        
+        print("\n🔬 Running Statistical Analysis...")
+        print("=" * 60)
+        
+        analysis_results = {}
+        
+        for dataset_name in datasets:
+            print(f"\nAnalyzing {dataset_name}...")
+            
+            # Combine detailed results from all methods
+            combined_df = combine_detailed_results(dataset_name, methods)
+            
+            if combined_df.empty:
+                print(f"⚠️  No detailed results found for {dataset_name}")
+                continue
+            
+            # Run statistical analysis
+            dataset_analysis = self.statistical_analyzer.analyze_dataset_results(combined_df)
+            analysis_results[dataset_name] = dataset_analysis
+            
+            # Generate and display report
+            report = self.statistical_analyzer.generate_statistical_report(
+                dataset_analysis, dataset_name
+            )
+            print(report)
+        
+        return analysis_results
+    
+    def save_statistical_results(self, analysis_results: Dict[str, Any], filename: str = "statistical_analysis.json"):
+        """
+        Save statistical analysis results to file.
+        
+        Args:
+            analysis_results: Results from run_statistical_analysis
+            filename: Output filename
+        """
+        if not analysis_results:
+            print("No statistical analysis results to save.")
+            return
+        
+        # Convert results to serializable format
+        serializable_results = {}
+        
+        for dataset_name, dataset_results in analysis_results.items():
+            dataset_dict = {
+                'best_method': dataset_results.get('best_method'),
+                'best_combined_rouge': dataset_results.get('best_combined_rouge'),
+                'n_methods': dataset_results.get('n_methods'),
+                'confidence_level': dataset_results.get('confidence_level'),
+                'bootstrap_results': {},
+                'significance_tests': []
+            }
+            
+            # Convert bootstrap results
+            bootstrap_results = dataset_results.get('bootstrap_results', {})
+            for method, method_results in bootstrap_results.items():
+                dataset_dict['bootstrap_results'][method] = {}
+                for metric, result in method_results.items():
+                    dataset_dict['bootstrap_results'][method][metric] = {
+                        'mean': result.mean,
+                        'ci_lower': result.ci_lower,
+                        'ci_upper': result.ci_upper,
+                        'std_error': result.std_error,
+                        'n_samples': result.n_samples
+                    }
+            
+            # Convert significance test results
+            significance_tests = dataset_results.get('significance_tests', [])
+            for test in significance_tests:
+                dataset_dict['significance_tests'].append({
+                    'method_a': test.method_a,
+                    'method_b': test.method_b,
+                    'metric': test.metric,
+                    'p_value': test.p_value,
+                    'corrected_p_value': test.corrected_p_value,
+                    'effect_size': test.effect_size,
+                    'ci_lower': test.ci_lower,
+                    'ci_upper': test.ci_upper,
+                    'is_significant': test.is_significant
+                })
+            
+            serializable_results[dataset_name] = dataset_dict
+        
+        # Save to file
+        with open(filename, 'w') as f:
+            json.dump(serializable_results, f, indent=2)
+        
+        print(f"Statistical analysis results saved to {filename}")
+    
+    def print_summary_with_statistics(self, analysis_results: Dict[str, Any] = None):
+        """
+        Print summary with statistical analysis if available.
+        
+        Args:
+            analysis_results: Optional statistical analysis results
+        """
+        # Print standard summary first
+        self.print_summary()
+        
+        # Add statistical summary if available
+        if analysis_results and self.statistical_analyzer:
+            print("\n" + "="*60)
+            print("STATISTICAL SUMMARY")
+            print("="*60)
+            
+            for dataset_name, dataset_results in analysis_results.items():
+                best_method = dataset_results.get('best_method')
+                best_rouge = dataset_results.get('best_combined_rouge')
+                n_methods = dataset_results.get('n_methods', 0)
+                
+                print(f"\n{dataset_name.upper()}:")
+                if best_method and best_rouge is not None:
+                    print(f"  Best Method: {best_method} (Combined_ROUGE: {best_rouge:.4f})")
+                
+                # Count significant differences
+                significance_tests = dataset_results.get('significance_tests', [])
+                n_significant = sum(1 for test in significance_tests if test.is_significant)
+                
+                print(f"  Methods Compared: {n_methods}")
+                print(f"  Significant Differences: {n_significant}/{len(significance_tests)}")
+                
+                if significance_tests:
+                    print(f"  Significance Tests: {len(significance_tests)} (Holm-Bonferroni corrected)")
+    
+    def run_comprehensive_benchmark_with_statistics(self, 
+                                                  datasets: List[str] = ['cnn_dailymail', 'arxiv'],
+                                                  methods: Optional[List[str]] = None,
+                                                  max_samples: int = 50,
+                                                  max_sentences: int = 3) -> tuple:
+        """
+        Run comprehensive benchmark with statistical analysis.
+        
+        Returns:
+            Tuple of (benchmark_results, statistical_analysis_results)
+        """
+        # Run standard benchmark
+        benchmark_results = self.run_comprehensive_benchmark(
+            datasets=datasets,
+            methods=methods, 
+            max_samples=max_samples,
+            max_sentences=max_sentences
+        )
+        
+        # Run statistical analysis if enabled
+        statistical_results = {}
+        if self.enable_statistical_analysis and methods:
+            statistical_results = self.run_statistical_analysis(datasets, methods)
+            
+            # Save statistical results
+            self.save_statistical_results(statistical_results)
+        
+        return benchmark_results, statistical_results

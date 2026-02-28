@@ -34,9 +34,10 @@ def main():
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
                        default=['textrank', 'tfidfrank', 
-                                 'distilbart', 'bart', 'Pegasus-X',             
-                                 'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
-                                 'gemini', 'GPT-5-mini'],
+                                #  'distilbart', 'bart', 'Pegasus-X',             
+                                #  'LongformerEncoderDecoder', 'Retrieval-Augmented-Summarizer',
+                                #  'gemini', 'GPT-5-mini'
+                                 ],
                        choices=['textrank', 'tfidfrank', 
                                 't5', 'distilbart', 'bart', 
                                 'gemini', 'GPT-5-mini', 
@@ -54,6 +55,8 @@ def main():
                        help='Output file for results (csv or json)')
     parser.add_argument('--gemini-api-key', type=str,
                        help='Gemini API key (or set GEMINI_API_KEY env var)')
+    parser.add_argument('--enable-statistics', action='store_true', default=True,
+                       help='Enable comprehensive statistical analysis with bootstrap CI and significance tests')
     
     args = parser.parse_args()
     
@@ -68,26 +71,43 @@ def main():
     print(f"Max samples per dataset: {args.max_samples}")
     print(f"Max sentences per summary: {args.max_sentences}")
     print(f"AWS Lambda simulation: {'Enabled' if args.use_lambda else 'Disabled'}")
+    print(f"Statistical analysis: {'Enabled' if args.enable_statistics else 'Disabled'}")
     print(f"Output file: {args.output}")
     print()
     
     # Initialize benchmark framework
-    framework = BenchmarkFramework(use_lambda_simulation=args.use_lambda)
+    framework = BenchmarkFramework(
+        use_lambda_simulation=args.use_lambda,
+        enable_statistical_analysis=args.enable_statistics
+    )
     
     # Run comprehensive benchmark
     try:
-        results = framework.run_comprehensive_benchmark(
-            datasets=args.datasets,
-            methods=args.methods,
-            max_samples=args.max_samples,
-            max_sentences=args.max_sentences
-        )
+        if args.enable_statistics:
+            # Run benchmark with statistical analysis
+            results, statistical_results = framework.run_comprehensive_benchmark_with_statistics(
+                datasets=args.datasets,
+                methods=args.methods,
+                max_samples=args.max_samples,
+                max_sentences=args.max_sentences
+            )
+            
+            # Display results with statistics
+            framework.print_summary_with_statistics(statistical_results)
+        else:
+            # Run standard benchmark
+            results = framework.run_comprehensive_benchmark(
+                datasets=args.datasets,
+                methods=args.methods,
+                max_samples=args.max_samples,
+                max_sentences=args.max_sentences
+            )
+            
+            # Display standard results
+            framework.print_summary()
 
         # Save summarisations
-        pd.DataFrame(results).to_csv('summarisatuion-results.csv', index=False)        
-        
-        # Display results
-        framework.print_summary()
+        pd.DataFrame(results).to_csv('summarisatuion-results.csv', index=False)
         
         # Save results
         framework.save_results(args.output)
