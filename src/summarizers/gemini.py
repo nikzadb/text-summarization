@@ -84,11 +84,18 @@ class GeminiSummarizer(BaseSummarizer):
         output_tokens = self._estimate_tokens(summary)
         cost = (input_tokens / 1000.0) * self.input_price_per_1k + (output_tokens / 1000.0) * self.output_price_per_1k
 
+        # Calculate AWS CPU cost in addition to API cost
+        processing_time_hours = (end_time - start_time) / 3600.0
+        aws_cpu_cost = processing_time_hours * 0.35  # $0.35/hour for CPU instance
+        total_cost = cost + aws_cpu_cost  # API cost + AWS hosting cost
+        
         return {
             "summary": summary,
             "time_taken": end_time - start_time,
             "method": self.name,
-            "cost": cost,
+            "cost": total_cost,
+            "api_cost": cost,
+            "aws_cost": aws_cpu_cost,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
         }
@@ -156,13 +163,22 @@ class HybridTextRankGeminiSummarizer(_HybridBase):
         llm = self._bench(intermediate_summary, max_sentences)
 
         total_time = time.time() - start_time
+        
+        # Calculate total cost: AWS CPU cost + Gemini API cost
+        processing_time_hours = total_time / 3600.0
+        aws_cpu_cost = processing_time_hours * 0.35  # $0.35/hour for CPU instance
+        gemini_api_cost = llm["cost"]  # API token cost
+        total_cost = aws_cpu_cost + gemini_api_cost
+        
         return {
             "summary": llm["final_summary"],
             "time_taken": total_time,
             "textrank_time": textrank_time,
             "gemini_time": llm["gemini_time"],
             "method": self.name,
-            "cost": llm["cost"],
+            "cost": total_cost,
+            "api_cost": gemini_api_cost,
+            "aws_cost": aws_cpu_cost,
             "input_tokens": llm["input_tokens"],
             "output_tokens": llm["output_tokens"],
             "hybrid_extract_sentences": self.extract_k,
@@ -189,13 +205,22 @@ class HybridTFIDFRankGeminiSummarizer(_HybridBase):
         llm = self._bench(intermediate_summary, max_sentences)
 
         total_time = time.time() - start_time
+        
+        # Calculate total cost: AWS CPU cost + Gemini API cost
+        processing_time_hours = total_time / 3600.0
+        aws_cpu_cost = processing_time_hours * 0.35  # $0.35/hour for CPU instance
+        gemini_api_cost = llm["cost"]  # API token cost
+        total_cost = aws_cpu_cost + gemini_api_cost
+        
         return {
             "summary": llm["final_summary"],
             "time_taken": total_time,
             "tfidfrank_time": tfidfrank_time,
             "gemini_time": llm["gemini_time"],
             "method": self.name,
-            "cost": llm["cost"],
+            "cost": total_cost,
+            "api_cost": gemini_api_cost,
+            "aws_cost": aws_cpu_cost,
             "input_tokens": llm["input_tokens"],
             "output_tokens": llm["output_tokens"],
             "hybrid_extract_sentences": self.extract_k,

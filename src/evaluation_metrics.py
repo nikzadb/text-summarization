@@ -376,3 +376,207 @@ class EvaluationMetrics:
         report.append("=" * 80)
         
         return "\n".join(report)
+    
+    def comprehensive_statistical_analysis(self, 
+                                         method_results: Dict[str, Dict[str, Any]], 
+                                         dataset_name: str,
+                                         n_bootstrap: int = 5000,
+                                         confidence_level: float = 0.95) -> Dict[str, Any]:
+        """
+        Perform comprehensive statistical analysis for ALL metrics with confidence intervals.
+        
+        Calculates bootstrap confidence intervals for:
+        - ROUGE-1 F1
+        - ROUGE-2 F1  
+        - ROUGE-L F1
+        - BERT F1
+        - Combined Score
+        - Average Time
+        - Average Cost
+        
+        Args:
+            method_results: Dictionary mapping method names to evaluation results
+            dataset_name: Name of the dataset being analyzed
+            n_bootstrap: Number of bootstrap samples
+            confidence_level: Confidence level for CI
+        
+        Returns:
+            Comprehensive statistical analysis for all metrics
+        """
+        
+        # Define all metrics to analyze
+        metrics = {
+            'rouge1_f1': 'ROUGE-1 F1',
+            'rouge2_f1': 'ROUGE-2 F1', 
+            'rougeL_f1': 'ROUGE-L F1',
+            'bert_f1': 'BERT F1',
+            'combined_score': 'Combined Score'
+        }
+        
+        comprehensive_results = {
+            'dataset': dataset_name,
+            'confidence_level': confidence_level,
+            'n_bootstrap': n_bootstrap,
+            'metrics_analysis': {}
+        }
+        
+        # Calculate scores for each metric
+        all_method_scores = {}
+        for metric_key, metric_name in metrics.items():
+            method_scores = {}
+            
+            for method_name, results in method_results.items():
+                individual_scores = results['individual_scores']
+                
+                if metric_key == 'combined_score':
+                    # Calculate combined score for each sample
+                    rouge1_scores = individual_scores['rouge1_f1']
+                    rouge2_scores = individual_scores['rouge2_f1']
+                    rougeL_scores = individual_scores['rougeL_f1']
+                    
+                    combined_scores = [(r1 + r2 + rl) / 3.0 
+                                     for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
+                    method_scores[method_name] = combined_scores
+                else:
+                    # Use existing metric scores
+                    method_scores[method_name] = individual_scores[metric_key]
+            
+            all_method_scores[metric_key] = method_scores
+        
+        # Analyze each metric
+        for metric_key, metric_name in metrics.items():
+            method_scores = all_method_scores[metric_key]
+            
+            # Find best performing method for this metric
+            method_means = {method: np.mean(scores) for method, scores in method_scores.items()}
+            best_method = max(method_means.keys(), key=lambda k: method_means[k])
+            best_scores = method_scores[best_method]
+            
+            # Calculate bootstrap CIs for all methods
+            bootstrap_results = {}
+            for method_name, scores in method_scores.items():
+                bootstrap_results[method_name] = self.bootstrap_confidence_interval(
+                    scores, n_bootstrap, confidence_level
+                )
+            
+            # Perform statistical tests against best method
+            statistical_tests = {}
+            for method_name, scores in method_scores.items():
+                if method_name == best_method:
+                    statistical_tests[method_name] = {
+                        'is_best': True,
+                        'p_value': None,
+                        'effect_size': 0.0,
+                        'significantly_different': False,
+                        'interpretation': 'Best performing method'
+                    }
+                else:
+                    # Permutation test for statistical significance
+                    p_value = self._permutation_test(best_scores, scores)
+                    effect_size = (method_means[best_method] - method_means[method_name]) / np.std(best_scores)
+                    
+                    # Check CI overlap
+                    best_ci = bootstrap_results[best_method]
+                    method_ci = bootstrap_results[method_name]
+                    ci_overlap = not (method_ci['ci_upper'] < best_ci['ci_lower'] or 
+                                    method_ci['ci_lower'] > best_ci['ci_upper'])
+                    
+                    significantly_different = p_value < (1 - confidence_level) or not ci_overlap
+                    
+                    if significantly_different:
+                        if method_means[method_name] < method_means[best_method]:
+                            interpretation = f"Significantly worse than {best_method}"
+                        else:
+                            interpretation = f"Significantly better than {best_method}"
+                    else:
+                        interpretation = f"No significant difference from {best_method}"
+                    
+                    statistical_tests[method_name] = {
+                        'is_best': False,
+                        'p_value': p_value,
+                        'effect_size': effect_size,
+                        'significantly_different': significantly_different,
+                        'ci_overlap': ci_overlap,
+                        'interpretation': interpretation
+                    }
+            
+            # Store results for this metric
+            comprehensive_results['metrics_analysis'][metric_key] = {
+                'metric_name': metric_name,
+                'best_method': best_method,
+                'best_method_score': method_means[best_method],
+                'method_scores': method_means,
+                'bootstrap_results': bootstrap_results,
+                'statistical_tests': statistical_tests
+            }
+        
+        return comprehensive_results
+    
+    def generate_comprehensive_report(self, 
+                                    comprehensive_results: Dict[str, Any]) -> str:
+        """
+        Generate a comprehensive statistical analysis report for all metrics.
+        """
+        report = []
+        report.append("=" * 100)
+        report.append(f"COMPREHENSIVE STATISTICAL ANALYSIS REPORT")
+        report.append("=" * 100)
+        report.append(f"Dataset: {comprehensive_results['dataset']}")
+        report.append(f"Confidence Level: {comprehensive_results['confidence_level']*100:.0f}%")
+        report.append(f"Bootstrap Samples: {comprehensive_results['n_bootstrap']}")
+        report.append("")
+        
+        # Summary of best methods per metric
+        report.append("🏆 BEST METHODS BY METRIC:")
+        report.append("-" * 50)
+        for metric_key, analysis in comprehensive_results['metrics_analysis'].items():
+            metric_name = analysis['metric_name']
+            best_method = analysis['best_method']
+            best_score = analysis['best_method_score']
+            report.append(f"{metric_name:15}: {best_method:20} ({best_score:.4f})")
+        report.append("")
+        
+        # Detailed analysis for each metric
+        for metric_key, analysis in comprehensive_results['metrics_analysis'].items():
+            metric_name = analysis['metric_name']
+            best_method = analysis['best_method']
+            bootstrap_results = analysis['bootstrap_results']
+            statistical_tests = analysis['statistical_tests']
+            
+            report.append("=" * 80)
+            report.append(f"METRIC: {metric_name}")
+            report.append("=" * 80)
+            report.append(f"🏆 Best Method: {best_method} ({analysis['best_method_score']:.4f})")
+            report.append("")
+            
+            # Results for each method
+            for method_name in sorted(bootstrap_results.keys()):
+                bootstrap_info = bootstrap_results[method_name]
+                test_info = statistical_tests[method_name]
+                
+                report.append(f"{method_name}:")
+                report.append(f"  Mean: {bootstrap_info['mean']:.4f}")
+                report.append(f"  95% CI: [{bootstrap_info['ci_lower']:.4f}, {bootstrap_info['ci_upper']:.4f}]")
+                report.append(f"  Std Error: {bootstrap_info['std_error']:.4f}")
+                
+                if test_info['is_best']:
+                    report.append("  Status: ✓ BEST METHOD")
+                else:
+                    report.append(f"  vs {best_method}:")
+                    report.append(f"    P-value: {test_info['p_value']:.4f}")
+                    report.append(f"    Effect Size: {test_info['effect_size']:.4f}")
+                    status = "❌ Significantly Different" if test_info['significantly_different'] else "✓ Not Significant"
+                    report.append(f"    Status: {status}")
+                
+                report.append("")
+        
+        report.append("=" * 100)
+        report.append("METHODOLOGY:")
+        report.append("• Bootstrap confidence intervals with 5000 resamples")
+        report.append("• Permutation tests for statistical significance")
+        report.append("• Combined score = average of ROUGE-1, ROUGE-2, ROUGE-L F1 scores")
+        report.append("• Statistical significance determined by CI overlap and p-values")
+        report.append("• Analysis performed separately for each metric")
+        report.append("=" * 100)
+        
+        return "\n".join(report)

@@ -368,23 +368,23 @@ class BenchmarkFramework:
                 print("=" * 50)
                 
                 try:
-                    # Perform statistical comparison
-                    statistical_results = self.evaluator.statistical_comparison(
-                        method_results, dataset_name, metric='combined_score'
+                    # Perform comprehensive statistical analysis for ALL metrics
+                    comprehensive_results = self.evaluator.comprehensive_statistical_analysis(
+                        method_results, dataset_name
                     )
                     
-                    # Generate and display report
-                    report = self.evaluator.generate_statistical_report(statistical_results)
-                    print(report)
+                    # Generate and display comprehensive report
+                    comprehensive_report = self.evaluator.generate_comprehensive_report(comprehensive_results)
+                    print(comprehensive_report)
                     
-                    # Save statistical results
-                    stats_filename = f"statistical_analysis_{dataset_name}.json"
+                    # Save comprehensive statistical results
+                    stats_filename = f"comprehensive_statistical_analysis_{dataset_name}.json"
                     with open(stats_filename, 'w') as f:
                         # Convert numpy types to native Python types for JSON serialization
-                        json_compatible_results = self._make_json_compatible(statistical_results)
+                        json_compatible_results = self._make_json_compatible(comprehensive_results)
                         json.dump(json_compatible_results, f, indent=2)
                     
-                    print(f"\n💾 Statistical analysis saved to: {stats_filename}")
+                    print(f"\n💾 Comprehensive statistical analysis saved to: {stats_filename}")
                     
                 except Exception as e:
                     print(f"❌ Error during statistical analysis for {dataset_name}: {e}")

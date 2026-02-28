@@ -177,14 +177,19 @@ Summary:"""
         
         end_time = time.time()
         
-        # Calculate cost based on actual usage
-        cost = self._estimate_cost(prompt, summary)
+        # Calculate API cost and AWS CPU cost
+        api_cost = self._estimate_cost(prompt, summary)
+        processing_time_hours = (end_time - start_time) / 3600.0
+        aws_cpu_cost = processing_time_hours * 0.35  # $0.35/hour for CPU instance
+        total_cost = api_cost + aws_cpu_cost  # API cost + AWS hosting cost
         
         return {
             "summary": summary,
             "time_taken": end_time - start_time,
             "method": self.name,
-            "cost": cost,
+            "cost": total_cost,
+            "api_cost": api_cost,
+            "aws_cost": aws_cpu_cost,
             "input_tokens": self._estimate_tokens(prompt),
             "output_tokens": self._estimate_tokens(summary),
         }

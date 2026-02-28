@@ -61,7 +61,8 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
             return '. '.join(sentences) + '.'
     
     def get_cost(self) -> float:
-        return 0.0
+        """Return AWS GPU instance cost per hour for transformer models"""
+        return 0.95  # $0.95/hour for GPU instance
     
     def cleanup(self):
         """Clean up model resources and free GPU/CPU memory"""
