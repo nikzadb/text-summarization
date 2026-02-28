@@ -254,7 +254,7 @@ class BenchmarkFramework:
         summary_stats = self.evaluator.get_summary_statistics(evaluation_result)
 
         # Save detailed sample-level results
-        print(f"Saving detailed results for {method_name}...")
+        print(f"📊 Processing individual sample results for {method_name} on {dataset_name}...")
         individual_scores = evaluation_result['individual_scores']
         
         detailed_data = []
@@ -263,6 +263,7 @@ class BenchmarkFramework:
                 'sample_id': i,
                 'method': method_name,
                 'dataset': dataset_name,
+                'original_article': dataset_samples[i]['article'],
                 'reference_summary': ref,
                 'generated_summary': summ,
                 'processing_time': times[i],
@@ -283,7 +284,9 @@ class BenchmarkFramework:
             detailed_data.append(sample_data)
         
         detailed_df = pd.DataFrame(detailed_data)
-        detailed_df.to_csv(f'detailed_results_{dataset_name}_{method_name}.csv', index=False)
+        filename = f'benchmark_{method_name}_{dataset_name}.csv'
+        detailed_df.to_csv(filename, index=False)
+        print(f"💾 Saved detailed results to {filename}")
 
         # free up the dataframe memory
         detailed_df = None 
@@ -345,11 +348,47 @@ class BenchmarkFramework:
                             print(f"✗ Failed to benchmark {method}: {e}")
                     else:
                         print(f"✗ Unknown method: {method}")
+                
+                # Save dataset-specific benchmark results
+                self._save_dataset_results(dataset_name)
                         
             except Exception as e:
                 print(f"✗ Failed to load {dataset_name}: {e}")
         
         return all_results
+    
+    def _save_dataset_results(self, dataset_name: str):
+        """Save benchmark results for a specific dataset."""
+        if not self.results:
+            return
+            
+        # Filter results for this dataset
+        dataset_results = [result for result in self.results if result.dataset == dataset_name]
+        if not dataset_results:
+            return
+            
+        # Create dataframe for this dataset
+        data = []
+        for result in dataset_results:
+            data.append({
+                'Method': result.method,
+                'Dataset': result.dataset,
+                'ROUGE-1 F1': result.rouge1_f1,
+                'ROUGE-2 F1': result.rouge2_f1,
+                'ROUGE-L F1': result.rougeL_f1,
+                'BERT F1': result.bert_f1,
+                'Combined Score': result.combined_score,
+                'Avg Time (s)': result.avg_time,
+                'Avg Cost ($)': result.avg_cost,
+                'Total Time (s)': result.total_time,
+                'Total Cost ($)': result.total_cost,
+                'Sample Count': result.sample_count
+            })
+        
+        df = pd.DataFrame(data)
+        filename = f'benchmark_summary_{dataset_name}.csv'
+        df.to_csv(filename, index=False)
+        print(f"📊 Benchmark summary saved to {filename}")
     
     def _save_intermediate_results(self):
         """Save intermediate results as CSV after each method completion"""
@@ -511,14 +550,68 @@ class BenchmarkFramework:
                 })
             
             serializable_results[dataset_name] = dataset_dict
-        
-            # Save to file
-            filename = f'statistical_analysis_{dataset_name}.json'
-            with open(filename, 'w') as f:
-                json.dump(serializable_results, f, indent=2)
-        
-            print(f"Statistical analysis results saved to {filename}")
+            
+            # Save individual dataset results to both JSON and CSV
+            dataset_filename_json = f'statistical_analysis_{dataset_name}.json'
+            with open(dataset_filename_json, 'w') as f:
+                json.dump({dataset_name: dataset_dict}, f, indent=2)
+            print(f"📊 Statistical analysis saved to {dataset_filename_json}")
+            
+            # Create CSV for bootstrap results
+            self._save_bootstrap_results_csv(dataset_name, dataset_results.get('bootstrap_results', {}))
+            
+            # Create CSV for significance tests
+            self._save_significance_tests_csv(dataset_name, dataset_results.get('significance_tests', []))
     
+    def _save_bootstrap_results_csv(self, dataset_name: str, bootstrap_results: Dict):
+        """Save bootstrap confidence interval results as CSV."""
+        if not bootstrap_results:
+            return
+            
+        data = []
+        for method, method_results in bootstrap_results.items():
+            for metric, result in method_results.items():
+                data.append({
+                    'dataset': dataset_name,
+                    'method': method,
+                    'metric': metric,
+                    'mean': result.mean,
+                    'ci_lower': result.ci_lower,
+                    'ci_upper': result.ci_upper,
+                    'std_error': result.std_error,
+                    'n_samples': result.n_samples
+                })
+        
+        df = pd.DataFrame(data)
+        filename = f'bootstrap_confidence_intervals_{dataset_name}.csv'
+        df.to_csv(filename, index=False)
+        print(f"📊 Bootstrap CI results saved to {filename}")
+    
+    def _save_significance_tests_csv(self, dataset_name: str, significance_tests: List):
+        """Save significance test results as CSV."""
+        if not significance_tests:
+            return
+            
+        data = []
+        for test in significance_tests:
+            data.append({
+                'dataset': dataset_name,
+                'method_a': test.method_a,
+                'method_b': test.method_b,
+                'metric': test.metric,
+                'p_value': test.p_value,
+                'corrected_p_value': test.corrected_p_value,
+                'effect_size': test.effect_size,
+                'ci_lower': test.ci_lower,
+                'ci_upper': test.ci_upper,
+                'is_significant': test.is_significant
+            })
+        
+        df = pd.DataFrame(data)
+        filename = f'significance_tests_{dataset_name}.csv'
+        df.to_csv(filename, index=False)
+        print(f"📊 Significance tests saved to {filename}")
+
     def print_summary_with_statistics(self, analysis_results: Dict[str, Any] = None):
         """
         Print summary with statistical analysis if available.
