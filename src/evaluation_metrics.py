@@ -104,11 +104,10 @@ class EvaluationMetrics:
             'rougeL_f1': avg_scores.get('rougeL_f1_mean', 0.0),
             'bert_f1': avg_scores.get('bert_f1_mean', 0.0),
             'combined_score': (
-                avg_scores.get('rouge1_f1_mean', 0.0) * 0.25 +
-                avg_scores.get('rouge2_f1_mean', 0.0) * 0.25 +
-                avg_scores.get('rougeL_f1_mean', 0.0) * 0.25 +
-                avg_scores.get('bert_f1_mean', 0.0) * 0.25
-            )
+                avg_scores.get('rouge1_f1_mean', 0.0) +
+                avg_scores.get('rouge2_f1_mean', 0.0) +
+                avg_scores.get('rougeL_f1_mean', 0.0)
+            ) / 3.0
         }
     
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
