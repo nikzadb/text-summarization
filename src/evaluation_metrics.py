@@ -168,26 +168,146 @@ class EvaluationMetrics:
             'sample_count': len(references)
         }
     
+    def compute_zscore_combined_metrics(self, evaluation_results: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Compute combined metrics using Z-score aggregation for statistically sound combination.
+        
+        Z_i = (M_i - μ) / σ
+        Combined = (Z_R1 + Z_R2 + Z_RL + Z_BERT + Z_BLEURT) / n_metrics
+        
+        Args:
+            evaluation_results: Results from evaluate_batch_summaries()
+            
+        Returns:
+            Dictionary with individual z-scores and combined metrics
+        """
+        individual_scores = evaluation_results['individual_scores']
+        
+        # Define metric keys and their corresponding score arrays
+        metrics = {
+            'rouge1_f1': individual_scores.get('rouge1_f1', []),
+            'rouge2_f1': individual_scores.get('rouge2_f1', []),
+            'rougeL_f1': individual_scores.get('rougeL_f1', []),
+            'bert_f1': individual_scores.get('bert_f1', []),
+            'bleurt_score': individual_scores.get('bleurt_score', [])
+        }
+        
+        # Compute Z-scores for each metric
+        z_scores = {}
+        for metric_name, scores in metrics.items():
+            if len(scores) > 0:
+                scores_array = np.array(scores)
+                mean = np.mean(scores_array)
+                std = np.std(scores_array, ddof=1)  # Sample standard deviation
+                
+                # Handle case where std = 0 (all scores identical)
+                if std == 0:
+                    z_scores[metric_name] = np.zeros_like(scores_array)
+                else:
+                    z_scores[metric_name] = (scores_array - mean) / std
+            else:
+                z_scores[metric_name] = np.array([])
+        
+        # Compute combined Z-scores
+        rouge_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1']
+        all_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1']
+        all_with_bleurt = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+        
+        # Combined ROUGE Z-scores
+        rouge_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        rouge_count = 0
+        for metric in rouge_metrics:
+            if len(z_scores[metric]) > 0:
+                rouge_z_combined += z_scores[metric]
+                rouge_count += 1
+        if rouge_count > 0:
+            rouge_z_combined /= rouge_count
+        
+        # Combined all metrics (ROUGE + BERT) Z-scores
+        all_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        all_count = 0
+        for metric in all_metrics:
+            if len(z_scores[metric]) > 0:
+                all_z_combined += z_scores[metric]
+                all_count += 1
+        if all_count > 0:
+            all_z_combined /= all_count
+        
+        # Combined all metrics including BLEURT Z-scores
+        bleurt_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        bleurt_count = 0
+        for metric in all_with_bleurt:
+            if len(z_scores[metric]) > 0:
+                bleurt_z_combined += z_scores[metric]
+                bleurt_count += 1
+        if bleurt_count > 0:
+            bleurt_z_combined /= bleurt_count
+        
+        return {
+            # Individual Z-score statistics
+            'rouge1_f1_zscore_mean': np.mean(z_scores['rouge1_f1']) if len(z_scores['rouge1_f1']) > 0 else 0.0,
+            'rouge2_f1_zscore_mean': np.mean(z_scores['rouge2_f1']) if len(z_scores['rouge2_f1']) > 0 else 0.0,
+            'rougeL_f1_zscore_mean': np.mean(z_scores['rougeL_f1']) if len(z_scores['rougeL_f1']) > 0 else 0.0,
+            'bert_f1_zscore_mean': np.mean(z_scores['bert_f1']) if len(z_scores['bert_f1']) > 0 else 0.0,
+            'bleurt_score_zscore_mean': np.mean(z_scores['bleurt_score']) if len(z_scores['bleurt_score']) > 0 else 0.0,
+            
+            # Combined Z-score metrics
+            'combined_zscore_rouge': np.mean(rouge_z_combined),
+            'combined_zscore_all': np.mean(all_z_combined),
+            'combined_zscore_with_bleurt': np.mean(bleurt_z_combined),
+            
+            # Standard deviations of combined scores
+            'combined_zscore_rouge_std': np.std(rouge_z_combined),
+            'combined_zscore_all_std': np.std(all_z_combined), 
+            'combined_zscore_with_bleurt_std': np.std(bleurt_z_combined),
+            
+            # Raw Z-score arrays for further analysis
+            'rouge_z_scores': rouge_z_combined.tolist(),
+            'all_z_scores': all_z_combined.tolist(),
+            'bleurt_z_scores': bleurt_z_combined.tolist()
+        }
+
     def get_summary_statistics(self, evaluation_results: Dict[str, Any]) -> Dict[str, float]:
         avg_scores = evaluation_results['average_scores']
         
+        # Traditional simple averaging (backward compatibility)
+        traditional_combined = (
+            avg_scores.get('rouge1_f1_mean', 0.0) +
+            avg_scores.get('rouge2_f1_mean', 0.0) +
+            avg_scores.get('rougeL_f1_mean', 0.0)
+        ) / 3.0
+        
+        traditional_with_bleurt = (
+            avg_scores.get('rouge1_f1_mean', 0.0) +
+            avg_scores.get('rouge2_f1_mean', 0.0) +
+            avg_scores.get('rougeL_f1_mean', 0.0) +
+            avg_scores.get('bleurt_score_mean', 0.0)
+        ) / 4.0
+        
+        # Z-score based combining (statistically sound)
+        zscore_metrics = self.compute_zscore_combined_metrics(evaluation_results)
+        
         return {
+            # Individual metric means
             'rouge1_f1': avg_scores.get('rouge1_f1_mean', 0.0),
             'rouge2_f1': avg_scores.get('rouge2_f1_mean', 0.0),
             'rougeL_f1': avg_scores.get('rougeL_f1_mean', 0.0),
             'bert_f1': avg_scores.get('bert_f1_mean', 0.0),
             'bleurt_score': avg_scores.get('bleurt_score_mean', 0.0),
-            'combined_score': (
-                avg_scores.get('rouge1_f1_mean', 0.0) +
-                avg_scores.get('rouge2_f1_mean', 0.0) +
-                avg_scores.get('rougeL_f1_mean', 0.0)
-            ) / 3.0,
-            'combined_score_with_bleurt': (
-                avg_scores.get('rouge1_f1_mean', 0.0) +
-                avg_scores.get('rouge2_f1_mean', 0.0) +
-                avg_scores.get('rougeL_f1_mean', 0.0) +
-                avg_scores.get('bleurt_score_mean', 0.0)
-            ) / 4.0
+            
+            # Traditional simple averaging (for backward compatibility)
+            'combined_score': traditional_combined,
+            'combined_score_with_bleurt': traditional_with_bleurt,
+            
+            # Z-score aggregation (statistically sound)
+            'combined_zscore_rouge': zscore_metrics['combined_zscore_rouge'],
+            'combined_zscore_all': zscore_metrics['combined_zscore_all'],
+            'combined_zscore_with_bleurt': zscore_metrics['combined_zscore_with_bleurt'],
+            
+            # Z-score standard deviations
+            'combined_zscore_rouge_std': zscore_metrics['combined_zscore_rouge_std'],
+            'combined_zscore_all_std': zscore_metrics['combined_zscore_all_std'],
+            'combined_zscore_with_bleurt_std': zscore_metrics['combined_zscore_with_bleurt_std']
         }
     
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
@@ -301,6 +421,17 @@ class EvaluationMetrics:
                 combined_scores = [(r1 + r2 + rl + b) / 4.0 
                                  for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
                 method_scores[method_name] = combined_scores
+            elif metric.startswith('combined_zscore'):
+                # For Z-score metrics, compute them from the evaluation results
+                eval_results = {'individual_scores': individual_scores}
+                zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
+                
+                if metric == 'combined_zscore_rouge':
+                    method_scores[method_name] = zscore_metrics['rouge_z_scores']
+                elif metric == 'combined_zscore_all':
+                    method_scores[method_name] = zscore_metrics['all_z_scores']
+                elif metric == 'combined_zscore_with_bleurt':
+                    method_scores[method_name] = zscore_metrics['bleurt_z_scores']
             else:
                 method_scores[method_name] = individual_scores[metric]
         
@@ -499,8 +630,11 @@ class EvaluationMetrics:
             'rougeL_f1': 'ROUGE-L F1',
             'bert_f1': 'BERT F1',
             'bleurt_score': 'BLEURT Score',
-            'combined_score': 'Combined Score',
-            'combined_score_with_bleurt': 'Combined Score with BLEURT',
+            'combined_score': 'Combined Score (Simple Average)',
+            'combined_score_with_bleurt': 'Combined Score with BLEURT (Simple Average)',
+            'combined_zscore_rouge': 'Combined Z-Score (ROUGE Only)',
+            'combined_zscore_all': 'Combined Z-Score (All Metrics)',
+            'combined_zscore_with_bleurt': 'Combined Z-Score with BLEURT',
             'processing_time': 'Processing Time (s)',
             'cost': 'Cost ($)'
         }
@@ -539,6 +673,17 @@ class EvaluationMetrics:
                     combined_scores = [(r1 + r2 + rl + b) / 4.0 
                                      for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
                     method_scores[method_name] = combined_scores
+                elif metric_key.startswith('combined_zscore'):
+                    # For Z-score metrics, we need to compute them from the evaluation results
+                    eval_results = {'individual_scores': individual_scores}
+                    zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
+                    
+                    if metric_key == 'combined_zscore_rouge':
+                        method_scores[method_name] = zscore_metrics['rouge_z_scores']
+                    elif metric_key == 'combined_zscore_all':
+                        method_scores[method_name] = zscore_metrics['all_z_scores']
+                    elif metric_key == 'combined_zscore_with_bleurt':
+                        method_scores[method_name] = zscore_metrics['bleurt_z_scores']
                 elif metric_key in ['processing_time', 'cost']:
                     # Use performance metrics from detailed results
                     method_scores[method_name] = individual_scores[metric_key]
