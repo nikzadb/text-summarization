@@ -90,11 +90,24 @@ class GPT5MiniSummarizer(BaseSummarizer):
     
     def _create_prompt(self, text: str, max_sentences: int = 3) -> str:
         """Create summarization prompt for GPT-5-mini."""
-        return f"""Summarize the following text in exactly {max_sentences} clear, concise sentences that capture the main points and key information:
 
-Text: {text}
+        prompt = (
+            f"""Summarize the text below in exactly {max_sentences} sentences\n
+            Rules:\n
+            - Only use information from the text.\n
+            - No interpretation or external knowledge.\n
+            - No bullet points.\n
+            - No introductory phrases.\n
+            - No concluding phrases.\n
+            - No meta commentary.\n
+            - Exactly {max_sentences} sentences.\n            
+            Text:{text}\n
 
-Summary:"""
+            Summary:
+            """
+        )
+
+        return prompt
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         """
