@@ -36,15 +36,24 @@ class BaseSummarizer(ABC):
         summary = self.summarize(text, max_sentences)
         end_time = time.time()
         
+        # Calculate AWS cost based on processing time
+        processing_time_hours = (end_time - start_time) / 3600.0  # Convert to hours
+        aws_cost = processing_time_hours * self.get_cost()  # Hourly rate varies by method
+        
         return {
             'summary': summary,
             'time_taken': end_time - start_time,
             'method': self.name,
-            'cost': self.get_cost()
+            'cost': aws_cost
         }
     
     def get_cost(self) -> float:
-        return 0.0
+        """Return AWS CPU instance cost per hour for traditional methods"""
+        return 0.35  # $0.35/hour for CPU instance
+    
+    def cleanup(self):
+        """Clean up model resources (GPU/CPU memory, etc.)"""
+        pass
 
 
 
