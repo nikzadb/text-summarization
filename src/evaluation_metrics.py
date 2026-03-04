@@ -847,3 +847,371 @@ class EvaluationMetrics:
         report.append("=" * 100)
         
         return "\n".join(report)
+    
+    def compute_pareto_frontier(self, 
+                              method_results: Dict[str, Dict[str, Any]], 
+                              objectives: List[str] = None,
+                              include_performance: bool = True) -> Dict[str, Any]:
+        """
+        Compute Pareto frontier for multi-objective evaluation of summarization methods.
+        
+        A method is Pareto optimal if no other method dominates it in ALL objectives.
+        Method A dominates method B if A is better than B in all objectives.
+        
+        Args:
+            method_results: Dictionary mapping method names to evaluation results
+            objectives: List of metrics to optimize. If None, uses default set.
+            include_performance: Whether to include processing_time and cost as objectives
+            
+        Returns:
+            Dictionary containing Pareto frontier analysis
+        """
+        
+        if objectives is None:
+            # Default objectives: maximize quality metrics, minimize time/cost
+            objectives = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+            if include_performance:
+                objectives.extend(['processing_time', 'cost'])  # These will be minimized
+        
+        # Extract method scores for each objective
+        method_scores = {}
+        for method_name, results in method_results.items():
+            avg_scores = results.get('average_scores', {})
+            scores = []
+            
+            for obj in objectives:
+                if obj in ['processing_time', 'cost']:
+                    # For time and cost, we want to minimize (lower is better)
+                    score = avg_scores.get(f'{obj}_mean', float('inf'))
+                    # Convert to negative for maximization (Pareto assumes maximization)
+                    scores.append(-score if score != float('inf') else float('-inf'))
+                else:
+                    # For quality metrics, we want to maximize (higher is better)
+                    score = avg_scores.get(f'{obj}_mean', 0.0)
+                    scores.append(score)
+            
+            method_scores[method_name] = scores
+        
+        # Find Pareto optimal solutions
+        methods = list(method_scores.keys())
+        n_methods = len(methods)
+        n_objectives = len(objectives)
+        
+        # Check dominance relationships
+        dominance_matrix = {}  # dominance_matrix[i][j] = True if method i dominates method j
+        pareto_optimal = set(range(n_methods))  # Start with all methods, remove dominated ones
+        
+        for i in range(n_methods):
+            dominance_matrix[i] = {}
+            scores_i = method_scores[methods[i]]
+            
+            for j in range(n_methods):
+                if i == j:
+                    dominance_matrix[i][j] = False
+                    continue
+                    
+                scores_j = method_scores[methods[j]]
+                
+                # Method i dominates method j if i is >= j in all objectives 
+                # and strictly better in at least one
+                better_in_all = all(scores_i[k] >= scores_j[k] for k in range(n_objectives))
+                better_in_at_least_one = any(scores_i[k] > scores_j[k] for k in range(n_objectives))
+                
+                dominates = better_in_all and better_in_at_least_one
+                dominance_matrix[i][j] = dominates
+                
+                # If i dominates j, remove j from Pareto optimal set
+                if dominates and j in pareto_optimal:
+                    pareto_optimal.discard(j)
+        
+        # Extract Pareto optimal methods
+        pareto_methods = [methods[i] for i in pareto_optimal]
+        
+        # Compute hypervolume (quality measure for Pareto frontier)
+        hypervolume = self._compute_hypervolume(method_scores, pareto_methods, objectives)
+        
+        # Compute spacing metric (diversity of solutions on frontier)
+        spacing = self._compute_spacing(method_scores, pareto_methods, objectives)
+        
+        # Find knee points (balanced solutions)
+        knee_points = self._find_knee_points(method_scores, pareto_methods, objectives)
+        
+        # Create detailed analysis
+        frontier_analysis = {}
+        for method in pareto_methods:
+            scores = method_scores[method]
+            analysis = {
+                'scores': {obj: score if obj not in ['processing_time', 'cost'] else -score 
+                          for obj, score in zip(objectives, scores)},
+                'rank': 1,  # All Pareto optimal methods have rank 1
+                'dominated_by': [],
+                'dominates': [methods[j] for j in range(n_methods) 
+                             if any(dominance_matrix[i][j] for i in pareto_optimal 
+                                   if methods[i] == method)]
+            }
+            frontier_analysis[method] = analysis
+        
+        # Rank non-Pareto methods by domination count
+        dominated_methods = [methods[i] for i in range(n_methods) if i not in pareto_optimal]
+        for method in dominated_methods:
+            method_idx = methods.index(method)
+            domination_count = sum(1 for i in pareto_optimal if dominance_matrix[i][method_idx])
+            dominated_by = [methods[i] for i in pareto_optimal if dominance_matrix[i][method_idx]]
+            
+            frontier_analysis[method] = {
+                'scores': {obj: score if obj not in ['processing_time', 'cost'] else -score 
+                          for obj, score in zip(objectives, method_scores[method])},
+                'rank': domination_count + 1,
+                'dominated_by': dominated_by,
+                'dominates': []
+            }
+        
+        return {
+            'objectives': objectives,
+            'pareto_optimal_methods': pareto_methods,
+            'dominated_methods': dominated_methods,
+            'frontier_analysis': frontier_analysis,
+            'dominance_matrix': {methods[i]: {methods[j]: dominance_matrix[i][j] 
+                                            for j in range(n_methods)} 
+                               for i in range(n_methods)},
+            'metrics': {
+                'hypervolume': hypervolume,
+                'spacing': spacing,
+                'frontier_size': len(pareto_methods),
+                'total_methods': n_methods,
+                'frontier_ratio': len(pareto_methods) / n_methods if n_methods > 0 else 0
+            },
+            'knee_points': knee_points,
+            'recommendations': self._generate_pareto_recommendations(frontier_analysis, objectives)
+        }
+    
+    def _compute_hypervolume(self, 
+                           method_scores: Dict[str, List[float]], 
+                           pareto_methods: List[str], 
+                           objectives: List[str]) -> float:
+        """
+        Compute hypervolume indicator for Pareto frontier.
+        Higher hypervolume indicates better frontier quality.
+        """
+        if not pareto_methods:
+            return 0.0
+        
+        # Use a simple hypervolume approximation (Monte Carlo for >3D)
+        n_objectives = len(objectives)
+        
+        if n_objectives <= 3:
+            # For 2D/3D, we can compute exact hypervolume
+            # Simplified: use product of normalized ranges
+            min_scores = []
+            max_scores = []
+            
+            for obj_idx in range(n_objectives):
+                obj_scores = [method_scores[method][obj_idx] for method in pareto_methods]
+                min_scores.append(min(obj_scores))
+                max_scores.append(max(obj_scores))
+            
+            # Hypervolume as product of ranges (normalized)
+            hypervolume = 1.0
+            for i in range(n_objectives):
+                range_val = max_scores[i] - min_scores[i]
+                hypervolume *= max(range_val, 0.001)  # Avoid division by zero
+            
+            return hypervolume
+        else:
+            # For higher dimensions, approximate with volume of convex hull
+            return float(len(pareto_methods))  # Simplified approximation
+    
+    def _compute_spacing(self, 
+                       method_scores: Dict[str, List[float]], 
+                       pareto_methods: List[str], 
+                       objectives: List[str]) -> float:
+        """
+        Compute spacing metric for Pareto frontier.
+        Lower spacing indicates more evenly distributed solutions.
+        """
+        if len(pareto_methods) < 2:
+            return 0.0
+        
+        # Compute pairwise distances between Pareto optimal solutions
+        distances = []
+        for i, method1 in enumerate(pareto_methods):
+            min_distance = float('inf')
+            scores1 = method_scores[method1]
+            
+            for j, method2 in enumerate(pareto_methods):
+                if i != j:
+                    scores2 = method_scores[method2]
+                    # Euclidean distance in objective space
+                    distance = sum((s1 - s2) ** 2 for s1, s2 in zip(scores1, scores2)) ** 0.5
+                    min_distance = min(min_distance, distance)
+            
+            distances.append(min_distance)
+        
+        # Spacing is standard deviation of distances
+        mean_distance = sum(distances) / len(distances)
+        variance = sum((d - mean_distance) ** 2 for d in distances) / len(distances)
+        
+        return variance ** 0.5
+    
+    def _find_knee_points(self, 
+                        method_scores: Dict[str, List[float]], 
+                        pareto_methods: List[str], 
+                        objectives: List[str]) -> List[str]:
+        """
+        Find knee points on Pareto frontier - solutions with best trade-offs.
+        """
+        if len(pareto_methods) < 2:
+            return pareto_methods
+        
+        # For multi-objective problems, knee points are solutions with maximum
+        # distance from utopia and nadir points
+        
+        # Find utopia point (best possible in each objective)
+        utopia = []
+        nadir = []
+        
+        for obj_idx in range(len(objectives)):
+            obj_scores = [method_scores[method][obj_idx] for method in pareto_methods]
+            utopia.append(max(obj_scores))
+            nadir.append(min(obj_scores))
+        
+        # Find solutions with maximum distance from line connecting utopia to nadir
+        knee_points = []
+        max_distance = 0
+        
+        for method in pareto_methods:
+            scores = method_scores[method]
+            
+            # Normalize scores to [0, 1] range
+            normalized_scores = []
+            for i, score in enumerate(scores):
+                if utopia[i] != nadir[i]:
+                    norm_score = (score - nadir[i]) / (utopia[i] - nadir[i])
+                else:
+                    norm_score = 0.5  # If no variation, put in middle
+                normalized_scores.append(norm_score)
+            
+            # Distance from origin to point (knee-ness measure)
+            distance = sum(s ** 2 for s in normalized_scores) ** 0.5
+            
+            if distance > max_distance:
+                max_distance = distance
+                knee_points = [method]
+            elif abs(distance - max_distance) < 1e-6:
+                knee_points.append(method)
+        
+        return knee_points
+    
+    def _generate_pareto_recommendations(self, 
+                                       frontier_analysis: Dict[str, Dict], 
+                                       objectives: List[str]) -> Dict[str, str]:
+        """Generate recommendations based on Pareto frontier analysis."""
+        recommendations = {}
+        
+        pareto_methods = [method for method, analysis in frontier_analysis.items() 
+                         if analysis['rank'] == 1]
+        
+        if not pareto_methods:
+            recommendations['overall'] = "No methods found on Pareto frontier"
+            return recommendations
+        
+        # Best in individual objectives
+        for obj in objectives:
+            if obj in ['processing_time', 'cost']:
+                # For time/cost, lower is better (scores were negated)
+                best_method = min(pareto_methods, 
+                                key=lambda m: frontier_analysis[m]['scores'][obj])
+                recommendations[f'best_{obj}'] = f"{best_method} (lowest {obj.replace('_', ' ')})"
+            else:
+                # For quality metrics, higher is better
+                best_method = max(pareto_methods, 
+                                key=lambda m: frontier_analysis[m]['scores'][obj])
+                recommendations[f'best_{obj}'] = f"{best_method} (highest {obj.replace('_', ' ')})"
+        
+        # Balanced recommendation (if multiple Pareto optimal)
+        if len(pareto_methods) > 1:
+            # Find method with best average normalized performance
+            best_balanced = None
+            best_avg = -float('inf')
+            
+            for method in pareto_methods:
+                scores = frontier_analysis[method]['scores']
+                avg_score = sum(scores.values()) / len(scores)
+                if avg_score > best_avg:
+                    best_avg = avg_score
+                    best_balanced = method
+            
+            recommendations['balanced'] = f"{best_balanced} (best overall trade-off)"
+        
+        return recommendations
+    
+    def generate_pareto_report(self, pareto_results: Dict[str, Any]) -> str:
+        """Generate a human-readable Pareto frontier analysis report."""
+        report = []
+        report.append("=" * 80)
+        report.append("PARETO FRONTIER ANALYSIS")
+        report.append("=" * 80)
+        
+        objectives = pareto_results['objectives']
+        pareto_methods = pareto_results['pareto_optimal_methods']
+        dominated_methods = pareto_results['dominated_methods']
+        metrics = pareto_results['metrics']
+        
+        report.append(f"Objectives: {', '.join(objectives)}")
+        report.append(f"Total Methods Evaluated: {metrics['total_methods']}")
+        report.append(f"Pareto Optimal Methods: {metrics['frontier_size']}")
+        report.append(f"Frontier Efficiency: {metrics['frontier_ratio']:.2%}")
+        report.append("")
+        
+        # Pareto optimal methods
+        report.append("🏆 PARETO OPTIMAL METHODS (Non-dominated):")
+        report.append("-" * 60)
+        frontier_analysis = pareto_results['frontier_analysis']
+        
+        for method in pareto_methods:
+            analysis = frontier_analysis[method]
+            report.append(f"\n{method}:")
+            for obj, score in analysis['scores'].items():
+                if obj in ['processing_time', 'cost']:
+                    report.append(f"  {obj.replace('_', ' ').title()}: {score:.4f}")
+                else:
+                    report.append(f"  {obj.replace('_', ' ').title()}: {score:.4f}")
+        
+        # Dominated methods
+        if dominated_methods:
+            report.append("\n" + "❌ DOMINATED METHODS:")
+            report.append("-" * 60)
+            for method in dominated_methods:
+                analysis = frontier_analysis[method]
+                report.append(f"\n{method} (Rank {analysis['rank']}):")
+                report.append(f"  Dominated by: {', '.join(analysis['dominated_by'])}")
+        
+        # Recommendations
+        recommendations = pareto_results['recommendations']
+        report.append("\n" + "💡 RECOMMENDATIONS:")
+        report.append("-" * 60)
+        for rec_type, recommendation in recommendations.items():
+            report.append(f"  {rec_type.replace('_', ' ').title()}: {recommendation}")
+        
+        # Knee points
+        knee_points = pareto_results['knee_points']
+        if knee_points:
+            report.append(f"\n🎯 KNEE POINTS (Best Trade-offs): {', '.join(knee_points)}")
+        
+        # Metrics
+        report.append("\n" + "📊 FRONTIER QUALITY METRICS:")
+        report.append("-" * 60)
+        report.append(f"  Hypervolume: {metrics['hypervolume']:.4f}")
+        report.append(f"  Spacing: {metrics['spacing']:.4f}")
+        report.append(f"  Diversity: {len(pareto_methods)} solutions")
+        
+        report.append("\n" + "=" * 80)
+        report.append("METHODOLOGY:")
+        report.append("• Pareto optimality: A method is optimal if no other method")
+        report.append("  dominates it in ALL objectives simultaneously")
+        report.append("• Hypervolume: Measures volume dominated by Pareto frontier")
+        report.append("• Spacing: Measures distribution evenness of frontier solutions")
+        report.append("• Knee points: Solutions with best trade-offs between objectives")
+        report.append("=" * 80)
+        
+        return "\n".join(report)
