@@ -8,6 +8,7 @@ import torch
 from tqdm import tqdm
 from scipy import stats
 import pandas as pd
+from bleurt_pytorch import BleurtTokenizer, BleurtForSequenceClassification
 
 # Suppress transformers warnings
 logging.set_verbosity_error()
@@ -24,6 +25,67 @@ class EvaluationMetrics:
             self.device = "mps"
         else:
             self.device = "cpu"
+        
+        # Initialize BLEURT model lazily
+        self.bleurt_tokenizer = None
+        self.bleurt_model = None
+        self._bleurt_initialized = False
+    
+    def _initialize_bleurt(self):
+        """Initialize BLEURT model and tokenizer lazily."""
+        if not self._bleurt_initialized:
+            try:
+                print("Loading BLEURT model...")
+                self.bleurt_tokenizer = BleurtTokenizer.from_pretrained('Elron/bleurt-base-512')
+                self.bleurt_model = BleurtForSequenceClassification.from_pretrained('Elron/bleurt-base-512')
+                self.bleurt_model.to(self.device)
+                self.bleurt_model.eval()
+                self._bleurt_initialized = True
+                print(f"BLEURT model loaded successfully on device: {self.device}")
+            except Exception as e:
+                print(f"Warning: Failed to load BLEURT model: {e}")
+                self._bleurt_initialized = False
+                
+    def compute_bleurt_scores(self, references: List[str], candidates: List[str], batch_size: int = 32) -> Dict[str, List[float]]:
+        """Compute BLEURT scores for a list of reference-candidate pairs."""
+        self._initialize_bleurt()
+        
+        if not self._bleurt_initialized:
+            print("BLEURT model not available, returning zero scores")
+            return {'bleurt_score': [0.0] * len(references)}
+        
+        if len(references) != len(candidates):
+            raise ValueError("References and candidates must have the same length")
+        
+        bleurt_scores = []
+        
+        # Process in batches
+        for i in tqdm(range(0, len(references), batch_size), desc="BLEURT"):
+            batch_refs = references[i:i+batch_size]
+            batch_cands = candidates[i:i+batch_size]
+            
+            with torch.no_grad():
+                inputs = self.bleurt_tokenizer(
+                    batch_refs, 
+                    batch_cands, 
+                    return_tensors='pt', 
+                    padding=True, 
+                    truncation=True, 
+                    max_length=512
+                ).to(self.device)
+                
+                outputs = self.bleurt_model(**inputs)
+                scores = outputs.logits.squeeze(-1).cpu().numpy()
+                
+                # Handle single item case
+                if scores.ndim == 0:
+                    scores = [float(scores)]
+                else:
+                    scores = scores.tolist()
+                    
+                bleurt_scores.extend(scores)
+        
+        return {'bleurt_score': bleurt_scores}
     
     def compute_rouge_scores(self, reference: str, candidate: str) -> Dict[str, float]:
         scores = self.rouge_scorer.score(reference, candidate)
@@ -59,7 +121,12 @@ class EvaluationMetrics:
             'bert_f1': bert_scores['bert_f1'][0]
         }
         
-        return {**rouge_scores, **bert_metrics}
+        bleurt_scores = self.compute_bleurt_scores([reference], [candidate])
+        bleurt_metrics = {
+            'bleurt_score': bleurt_scores['bleurt_score'][0]
+        }
+        
+        return {**rouge_scores, **bert_metrics, **bleurt_metrics}
     
     def evaluate_batch_summaries(self, references: List[str], candidates: List[str], batch_size: int = 64) -> Dict[str, Any]:
         if len(references) != len(candidates):
@@ -84,7 +151,11 @@ class EvaluationMetrics:
         print("Computing BERT scores...")
         bert_scores = self.compute_bert_scores(references, candidates, batch_size=batch_size)
         
-        all_scores = {**rouge_scores, **bert_scores}
+        # Process BLEURT scores in optimized batch mode
+        print("Computing BLEURT scores...")
+        bleurt_scores = self.compute_bleurt_scores(references, candidates, batch_size=batch_size//2)  # Smaller batch size for BLEURT
+        
+        all_scores = {**rouge_scores, **bert_scores, **bleurt_scores}
         
         avg_scores = {}
         for key, values in all_scores.items():
@@ -105,11 +176,18 @@ class EvaluationMetrics:
             'rouge2_f1': avg_scores.get('rouge2_f1_mean', 0.0),
             'rougeL_f1': avg_scores.get('rougeL_f1_mean', 0.0),
             'bert_f1': avg_scores.get('bert_f1_mean', 0.0),
+            'bleurt_score': avg_scores.get('bleurt_score_mean', 0.0),
             'combined_score': (
                 avg_scores.get('rouge1_f1_mean', 0.0) +
                 avg_scores.get('rouge2_f1_mean', 0.0) +
                 avg_scores.get('rougeL_f1_mean', 0.0)
-            ) / 3.0
+            ) / 3.0,
+            'combined_score_with_bleurt': (
+                avg_scores.get('rouge1_f1_mean', 0.0) +
+                avg_scores.get('rouge2_f1_mean', 0.0) +
+                avg_scores.get('rougeL_f1_mean', 0.0) +
+                avg_scores.get('bleurt_score_mean', 0.0)
+            ) / 4.0
         }
     
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
@@ -212,6 +290,16 @@ class EvaluationMetrics:
                 
                 combined_scores = [(r1 + r2 + rl) / 3.0 
                                  for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
+                method_scores[method_name] = combined_scores
+            elif metric == 'combined_score_with_bleurt':
+                # Calculate combined score including BLEURT for each sample
+                rouge1_scores = individual_scores['rouge1_f1']
+                rouge2_scores = individual_scores['rouge2_f1']
+                rougeL_scores = individual_scores['rougeL_f1']
+                bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
+                
+                combined_scores = [(r1 + r2 + rl + b) / 4.0 
+                                 for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
                 method_scores[method_name] = combined_scores
             else:
                 method_scores[method_name] = individual_scores[metric]
@@ -410,7 +498,9 @@ class EvaluationMetrics:
             'rouge2_f1': 'ROUGE-2 F1', 
             'rougeL_f1': 'ROUGE-L F1',
             'bert_f1': 'BERT F1',
+            'bleurt_score': 'BLEURT Score',
             'combined_score': 'Combined Score',
+            'combined_score_with_bleurt': 'Combined Score with BLEURT',
             'processing_time': 'Processing Time (s)',
             'cost': 'Cost ($)'
         }
@@ -438,6 +528,16 @@ class EvaluationMetrics:
                     
                     combined_scores = [(r1 + r2 + rl) / 3.0 
                                      for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
+                    method_scores[method_name] = combined_scores
+                elif metric_key == 'combined_score_with_bleurt':
+                    # Calculate combined score including BLEURT for each sample
+                    rouge1_scores = individual_scores['rouge1_f1']
+                    rouge2_scores = individual_scores['rouge2_f1']
+                    rougeL_scores = individual_scores['rougeL_f1']
+                    bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
+                    
+                    combined_scores = [(r1 + r2 + rl + b) / 4.0 
+                                     for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
                     method_scores[method_name] = combined_scores
                 elif metric_key in ['processing_time', 'cost']:
                     # Use performance metrics from detailed results
@@ -595,6 +695,8 @@ class EvaluationMetrics:
         report.append("• Bootstrap confidence intervals with 5000 resamples")
         report.append("• Permutation tests for statistical significance")
         report.append("• Combined score = average of ROUGE-1, ROUGE-2, ROUGE-L F1 scores")
+        report.append("• Combined score with BLEURT = average of ROUGE-1, ROUGE-2, ROUGE-L F1, and BLEURT scores")
+        report.append("• BLEURT (Bilingual Evaluation Understudy with Representations from Transformers)")
         report.append("• Statistical significance determined by CI overlap and p-values")
         report.append("• Analysis performed separately for each metric")
         report.append("=" * 100)
