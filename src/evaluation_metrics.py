@@ -3,7 +3,7 @@ from bert_score import score as bert_score
 import numpy as np
 from typing import List, Dict, Tuple, Any, Optional
 import warnings
-from transformers import logging
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, logging
 import torch
 from tqdm import tqdm
 from scipy import stats
@@ -36,8 +36,12 @@ class EvaluationMetrics:
         if not self._bleurt_initialized:
             try:
                 print("Loading BLEURT model...")
-                self.bleurt_tokenizer = BleurtTokenizer.from_pretrained('Elron/bleurt-base-512')
-                self.bleurt_model = BleurtForSequenceClassification.from_pretrained('Elron/bleurt-base-512')
+
+                self.bleurt_tokenizer = AutoTokenizer.from_pretrained("Elron/bleurt-base-512")
+                self.bleurt_model = AutoModelForSequenceClassification.from_pretrained("Elron/bleurt-base-512")
+
+                # self.bleurt_tokenizer = BleurtTokenizer.from_pretrained('Elron/bleurt-base-512')
+                # self.bleurt_model = BleurtForSequenceClassification.from_pretrained('Elron/bleurt-base-512')
                 self.bleurt_model.to(self.device)
                 self.bleurt_model.eval()
                 self._bleurt_initialized = True
