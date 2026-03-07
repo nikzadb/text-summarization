@@ -59,9 +59,18 @@ class GeminiSummarizer(BaseSummarizer):
             raise RuntimeError("Gemini model not initialized")
 
         prompt = (
-            f"Summarize the following text in exactly {max_sentences} sentences.\n"
-            f"Make the summary concise and capture the key points:\n\n"
-            f"{text}"
+            f"""Summarize the text below in exactly {max_sentences} sentences\n
+            Rules:\n
+            - Only use information from the text.\n
+            - No interpretation or external knowledge.\n
+            - No bullet points.\n
+            - No introductory phrases.\n
+            - No concluding phrases.\n
+            - No meta commentary.\n
+            - Exactly {max_sentences} sentences.\n
+            
+            Text:{text}
+            """
         )
 
         try:

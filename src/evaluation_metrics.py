@@ -3,11 +3,12 @@ from bert_score import score as bert_score
 import numpy as np
 from typing import List, Dict, Tuple, Any, Optional
 import warnings
-from transformers import logging
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, logging
 import torch
 from tqdm import tqdm
 from scipy import stats
 import pandas as pd
+from bleurt_pytorch import BleurtTokenizer, BleurtForSequenceClassification
 
 # Suppress transformers warnings
 logging.set_verbosity_error()
@@ -24,6 +25,71 @@ class EvaluationMetrics:
             self.device = "mps"
         else:
             self.device = "cpu"
+        
+        # Initialize BLEURT model lazily
+        self.bleurt_tokenizer = None
+        self.bleurt_model = None
+        self._bleurt_initialized = False
+    
+    def _initialize_bleurt(self):
+        """Initialize BLEURT model and tokenizer lazily."""
+        if not self._bleurt_initialized:
+            try:
+                print("Loading BLEURT model...")
+
+                self.bleurt_tokenizer = AutoTokenizer.from_pretrained("Elron/bleurt-base-512")
+                self.bleurt_model = AutoModelForSequenceClassification.from_pretrained("Elron/bleurt-base-512")
+
+                # self.bleurt_tokenizer = BleurtTokenizer.from_pretrained('Elron/bleurt-base-512')
+                # self.bleurt_model = BleurtForSequenceClassification.from_pretrained('Elron/bleurt-base-512')
+                self.bleurt_model.to(self.device)
+                self.bleurt_model.eval()
+                self._bleurt_initialized = True
+                print(f"BLEURT model loaded successfully on device: {self.device}")
+            except Exception as e:
+                print(f"Warning: Failed to load BLEURT model: {e}")
+                self._bleurt_initialized = False
+                
+    def compute_bleurt_scores(self, references: List[str], candidates: List[str], batch_size: int = 32) -> Dict[str, List[float]]:
+        """Compute BLEURT scores for a list of reference-candidate pairs."""
+        self._initialize_bleurt()
+        
+        if not self._bleurt_initialized:
+            print("BLEURT model not available, returning zero scores")
+            return {'bleurt_score': [0.0] * len(references)}
+        
+        if len(references) != len(candidates):
+            raise ValueError("References and candidates must have the same length")
+        
+        bleurt_scores = []
+        
+        # Process in batches
+        for i in tqdm(range(0, len(references), batch_size), desc="BLEURT"):
+            batch_refs = references[i:i+batch_size]
+            batch_cands = candidates[i:i+batch_size]
+            
+            with torch.no_grad():
+                inputs = self.bleurt_tokenizer(
+                    batch_refs, 
+                    batch_cands, 
+                    return_tensors='pt', 
+                    padding=True, 
+                    truncation=True, 
+                    max_length=512
+                ).to(self.device)
+                
+                outputs = self.bleurt_model(**inputs)
+                scores = outputs.logits.squeeze(-1).cpu().numpy()
+                
+                # Handle single item case
+                if scores.ndim == 0:
+                    scores = [float(scores)]
+                else:
+                    scores = scores.tolist()
+                    
+                bleurt_scores.extend(scores)
+        
+        return {'bleurt_score': bleurt_scores}
     
     def compute_rouge_scores(self, reference: str, candidate: str) -> Dict[str, float]:
         scores = self.rouge_scorer.score(reference, candidate)
@@ -59,7 +125,12 @@ class EvaluationMetrics:
             'bert_f1': bert_scores['bert_f1'][0]
         }
         
-        return {**rouge_scores, **bert_metrics}
+        bleurt_scores = self.compute_bleurt_scores([reference], [candidate])
+        bleurt_metrics = {
+            'bleurt_score': bleurt_scores['bleurt_score'][0]
+        }
+        
+        return {**rouge_scores, **bert_metrics, **bleurt_metrics}
     
     def evaluate_batch_summaries(self, references: List[str], candidates: List[str], batch_size: int = 64) -> Dict[str, Any]:
         if len(references) != len(candidates):
@@ -84,7 +155,11 @@ class EvaluationMetrics:
         print("Computing BERT scores...")
         bert_scores = self.compute_bert_scores(references, candidates, batch_size=batch_size)
         
-        all_scores = {**rouge_scores, **bert_scores}
+        # Process BLEURT scores in optimized batch mode
+        print("Computing BLEURT scores...")
+        bleurt_scores = self.compute_bleurt_scores(references, candidates, batch_size=batch_size//2)  # Smaller batch size for BLEURT
+        
+        all_scores = {**rouge_scores, **bert_scores, **bleurt_scores}
         
         avg_scores = {}
         for key, values in all_scores.items():
@@ -97,19 +172,146 @@ class EvaluationMetrics:
             'sample_count': len(references)
         }
     
+    def compute_zscore_combined_metrics(self, evaluation_results: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Compute combined metrics using Z-score aggregation for statistically sound combination.
+        
+        Z_i = (M_i - μ) / σ
+        Combined = (Z_R1 + Z_R2 + Z_RL + Z_BERT + Z_BLEURT) / n_metrics
+        
+        Args:
+            evaluation_results: Results from evaluate_batch_summaries()
+            
+        Returns:
+            Dictionary with individual z-scores and combined metrics
+        """
+        individual_scores = evaluation_results['individual_scores']
+        
+        # Define metric keys and their corresponding score arrays
+        metrics = {
+            'rouge1_f1': individual_scores.get('rouge1_f1', []),
+            'rouge2_f1': individual_scores.get('rouge2_f1', []),
+            'rougeL_f1': individual_scores.get('rougeL_f1', []),
+            'bert_f1': individual_scores.get('bert_f1', []),
+            'bleurt_score': individual_scores.get('bleurt_score', [])
+        }
+        
+        # Compute Z-scores for each metric
+        z_scores = {}
+        for metric_name, scores in metrics.items():
+            if len(scores) > 0:
+                scores_array = np.array(scores)
+                mean = np.mean(scores_array)
+                std = np.std(scores_array, ddof=1)  # Sample standard deviation
+                
+                # Handle case where std = 0 (all scores identical)
+                if std == 0:
+                    z_scores[metric_name] = np.zeros_like(scores_array)
+                else:
+                    z_scores[metric_name] = (scores_array - mean) / std
+            else:
+                z_scores[metric_name] = np.array([])
+        
+        # Compute combined Z-scores
+        rouge_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1']
+        all_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1']
+        all_with_bleurt = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+        
+        # Combined ROUGE Z-scores
+        rouge_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        rouge_count = 0
+        for metric in rouge_metrics:
+            if len(z_scores[metric]) > 0:
+                rouge_z_combined += z_scores[metric]
+                rouge_count += 1
+        if rouge_count > 0:
+            rouge_z_combined /= rouge_count
+        
+        # Combined all metrics (ROUGE + BERT) Z-scores
+        all_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        all_count = 0
+        for metric in all_metrics:
+            if len(z_scores[metric]) > 0:
+                all_z_combined += z_scores[metric]
+                all_count += 1
+        if all_count > 0:
+            all_z_combined /= all_count
+        
+        # Combined all metrics including BLEURT Z-scores
+        bleurt_z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        bleurt_count = 0
+        for metric in all_with_bleurt:
+            if len(z_scores[metric]) > 0:
+                bleurt_z_combined += z_scores[metric]
+                bleurt_count += 1
+        if bleurt_count > 0:
+            bleurt_z_combined /= bleurt_count
+        
+        return {
+            # Individual Z-score statistics
+            'rouge1_f1_zscore_mean': np.mean(z_scores['rouge1_f1']) if len(z_scores['rouge1_f1']) > 0 else 0.0,
+            'rouge2_f1_zscore_mean': np.mean(z_scores['rouge2_f1']) if len(z_scores['rouge2_f1']) > 0 else 0.0,
+            'rougeL_f1_zscore_mean': np.mean(z_scores['rougeL_f1']) if len(z_scores['rougeL_f1']) > 0 else 0.0,
+            'bert_f1_zscore_mean': np.mean(z_scores['bert_f1']) if len(z_scores['bert_f1']) > 0 else 0.0,
+            'bleurt_score_zscore_mean': np.mean(z_scores['bleurt_score']) if len(z_scores['bleurt_score']) > 0 else 0.0,
+            
+            # Combined Z-score metrics
+            'combined_zscore_rouge': np.mean(rouge_z_combined),
+            'combined_zscore_all': np.mean(all_z_combined),
+            'combined_zscore_with_bleurt': np.mean(bleurt_z_combined),
+            
+            # Standard deviations of combined scores
+            'combined_zscore_rouge_std': np.std(rouge_z_combined),
+            'combined_zscore_all_std': np.std(all_z_combined), 
+            'combined_zscore_with_bleurt_std': np.std(bleurt_z_combined),
+            
+            # Raw Z-score arrays for further analysis
+            'rouge_z_scores': rouge_z_combined.tolist(),
+            'all_z_scores': all_z_combined.tolist(),
+            'bleurt_z_scores': bleurt_z_combined.tolist()
+        }
+
     def get_summary_statistics(self, evaluation_results: Dict[str, Any]) -> Dict[str, float]:
         avg_scores = evaluation_results['average_scores']
         
+        # Traditional simple averaging (backward compatibility)
+        traditional_combined = (
+            avg_scores.get('rouge1_f1_mean', 0.0) +
+            avg_scores.get('rouge2_f1_mean', 0.0) +
+            avg_scores.get('rougeL_f1_mean', 0.0)
+        ) / 3.0
+        
+        traditional_with_bleurt = (
+            avg_scores.get('rouge1_f1_mean', 0.0) +
+            avg_scores.get('rouge2_f1_mean', 0.0) +
+            avg_scores.get('rougeL_f1_mean', 0.0) +
+            avg_scores.get('bleurt_score_mean', 0.0)
+        ) / 4.0
+        
+        # Z-score based combining (statistically sound)
+        zscore_metrics = self.compute_zscore_combined_metrics(evaluation_results)
+        
         return {
+            # Individual metric means
             'rouge1_f1': avg_scores.get('rouge1_f1_mean', 0.0),
             'rouge2_f1': avg_scores.get('rouge2_f1_mean', 0.0),
             'rougeL_f1': avg_scores.get('rougeL_f1_mean', 0.0),
             'bert_f1': avg_scores.get('bert_f1_mean', 0.0),
-            'combined_score': (
-                avg_scores.get('rouge1_f1_mean', 0.0) +
-                avg_scores.get('rouge2_f1_mean', 0.0) +
-                avg_scores.get('rougeL_f1_mean', 0.0)
-            ) / 3.0
+            'bleurt_score': avg_scores.get('bleurt_score_mean', 0.0),
+            
+            # Traditional simple averaging (for backward compatibility)
+            'combined_score': traditional_combined,
+            'combined_score_with_bleurt': traditional_with_bleurt,
+            
+            # Z-score aggregation (statistically sound)
+            'combined_zscore_rouge': zscore_metrics['combined_zscore_rouge'],
+            'combined_zscore_all': zscore_metrics['combined_zscore_all'],
+            'combined_zscore_with_bleurt': zscore_metrics['combined_zscore_with_bleurt'],
+            
+            # Z-score standard deviations
+            'combined_zscore_rouge_std': zscore_metrics['combined_zscore_rouge_std'],
+            'combined_zscore_all_std': zscore_metrics['combined_zscore_all_std'],
+            'combined_zscore_with_bleurt_std': zscore_metrics['combined_zscore_with_bleurt_std']
         }
     
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
@@ -213,6 +415,27 @@ class EvaluationMetrics:
                 combined_scores = [(r1 + r2 + rl) / 3.0 
                                  for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
                 method_scores[method_name] = combined_scores
+            elif metric == 'combined_score_with_bleurt':
+                # Calculate combined score including BLEURT for each sample
+                rouge1_scores = individual_scores['rouge1_f1']
+                rouge2_scores = individual_scores['rouge2_f1']
+                rougeL_scores = individual_scores['rougeL_f1']
+                bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
+                
+                combined_scores = [(r1 + r2 + rl + b) / 4.0 
+                                 for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
+                method_scores[method_name] = combined_scores
+            elif metric.startswith('combined_zscore'):
+                # For Z-score metrics, compute them from the evaluation results
+                eval_results = {'individual_scores': individual_scores}
+                zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
+                
+                if metric == 'combined_zscore_rouge':
+                    method_scores[method_name] = zscore_metrics['rouge_z_scores']
+                elif metric == 'combined_zscore_all':
+                    method_scores[method_name] = zscore_metrics['all_z_scores']
+                elif metric == 'combined_zscore_with_bleurt':
+                    method_scores[method_name] = zscore_metrics['bleurt_z_scores']
             else:
                 method_scores[method_name] = individual_scores[metric]
         
@@ -410,7 +633,12 @@ class EvaluationMetrics:
             'rouge2_f1': 'ROUGE-2 F1', 
             'rougeL_f1': 'ROUGE-L F1',
             'bert_f1': 'BERT F1',
-            'combined_score': 'Combined Score',
+            'bleurt_score': 'BLEURT Score',
+            'combined_score': 'Combined Score (Simple Average)',
+            'combined_score_with_bleurt': 'Combined Score with BLEURT (Simple Average)',
+            'combined_zscore_rouge': 'Combined Z-Score (ROUGE Only)',
+            'combined_zscore_all': 'Combined Z-Score (All Metrics)',
+            'combined_zscore_with_bleurt': 'Combined Z-Score with BLEURT',
             'processing_time': 'Processing Time (s)',
             'cost': 'Cost ($)'
         }
@@ -439,6 +667,27 @@ class EvaluationMetrics:
                     combined_scores = [(r1 + r2 + rl) / 3.0 
                                      for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
                     method_scores[method_name] = combined_scores
+                elif metric_key == 'combined_score_with_bleurt':
+                    # Calculate combined score including BLEURT for each sample
+                    rouge1_scores = individual_scores['rouge1_f1']
+                    rouge2_scores = individual_scores['rouge2_f1']
+                    rougeL_scores = individual_scores['rougeL_f1']
+                    bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
+                    
+                    combined_scores = [(r1 + r2 + rl + b) / 4.0 
+                                     for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
+                    method_scores[method_name] = combined_scores
+                elif metric_key.startswith('combined_zscore'):
+                    # For Z-score metrics, we need to compute them from the evaluation results
+                    eval_results = {'individual_scores': individual_scores}
+                    zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
+                    
+                    if metric_key == 'combined_zscore_rouge':
+                        method_scores[method_name] = zscore_metrics['rouge_z_scores']
+                    elif metric_key == 'combined_zscore_all':
+                        method_scores[method_name] = zscore_metrics['all_z_scores']
+                    elif metric_key == 'combined_zscore_with_bleurt':
+                        method_scores[method_name] = zscore_metrics['bleurt_z_scores']
                 elif metric_key in ['processing_time', 'cost']:
                     # Use performance metrics from detailed results
                     method_scores[method_name] = individual_scores[metric_key]
@@ -595,8 +844,378 @@ class EvaluationMetrics:
         report.append("• Bootstrap confidence intervals with 5000 resamples")
         report.append("• Permutation tests for statistical significance")
         report.append("• Combined score = average of ROUGE-1, ROUGE-2, ROUGE-L F1 scores")
+        report.append("• Combined score with BLEURT = average of ROUGE-1, ROUGE-2, ROUGE-L F1, and BLEURT scores")
+        report.append("• BLEURT (Bilingual Evaluation Understudy with Representations from Transformers)")
         report.append("• Statistical significance determined by CI overlap and p-values")
         report.append("• Analysis performed separately for each metric")
         report.append("=" * 100)
+        
+        return "\n".join(report)
+    
+    def compute_pareto_frontier(self, 
+                              method_results: Dict[str, Dict[str, Any]], 
+                              objectives: List[str] = None,
+                              include_performance: bool = True) -> Dict[str, Any]:
+        """
+        Compute Pareto frontier for multi-objective evaluation of summarization methods.
+        
+        A method is Pareto optimal if no other method dominates it in ALL objectives.
+        Method A dominates method B if A is better than B in all objectives.
+        
+        Args:
+            method_results: Dictionary mapping method names to evaluation results
+            objectives: List of metrics to optimize. If None, uses default set.
+            include_performance: Whether to include processing_time and cost as objectives
+            
+        Returns:
+            Dictionary containing Pareto frontier analysis
+        """
+        
+        if objectives is None:
+            # Default objectives: maximize quality metrics, minimize time/cost
+            objectives = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+            if include_performance:
+                objectives.extend(['processing_time', 'cost'])  # These will be minimized
+        
+        # Extract method scores for each objective
+        method_scores = {}
+        for method_name, results in method_results.items():
+            avg_scores = results.get('average_scores', {})
+            scores = []
+            
+            for obj in objectives:
+                if obj in ['processing_time', 'cost']:
+                    # For time and cost, we want to minimize (lower is better)
+                    score = avg_scores.get(f'{obj}_mean', float('inf'))
+                    # Convert to negative for maximization (Pareto assumes maximization)
+                    scores.append(-score if score != float('inf') else float('-inf'))
+                else:
+                    # For quality metrics, we want to maximize (higher is better)
+                    score = avg_scores.get(f'{obj}_mean', 0.0)
+                    scores.append(score)
+            
+            method_scores[method_name] = scores
+        
+        # Find Pareto optimal solutions
+        methods = list(method_scores.keys())
+        n_methods = len(methods)
+        n_objectives = len(objectives)
+        
+        # Check dominance relationships
+        dominance_matrix = {}  # dominance_matrix[i][j] = True if method i dominates method j
+        pareto_optimal = set(range(n_methods))  # Start with all methods, remove dominated ones
+        
+        for i in range(n_methods):
+            dominance_matrix[i] = {}
+            scores_i = method_scores[methods[i]]
+            
+            for j in range(n_methods):
+                if i == j:
+                    dominance_matrix[i][j] = False
+                    continue
+                    
+                scores_j = method_scores[methods[j]]
+                
+                # Method i dominates method j if i is >= j in all objectives 
+                # and strictly better in at least one
+                better_in_all = all(scores_i[k] >= scores_j[k] for k in range(n_objectives))
+                better_in_at_least_one = any(scores_i[k] > scores_j[k] for k in range(n_objectives))
+                
+                dominates = better_in_all and better_in_at_least_one
+                dominance_matrix[i][j] = dominates
+                
+                # If i dominates j, remove j from Pareto optimal set
+                if dominates and j in pareto_optimal:
+                    pareto_optimal.discard(j)
+        
+        # Extract Pareto optimal methods
+        pareto_methods = [methods[i] for i in pareto_optimal]
+        
+        # Compute hypervolume (quality measure for Pareto frontier)
+        hypervolume = self._compute_hypervolume(method_scores, pareto_methods, objectives)
+        
+        # Compute spacing metric (diversity of solutions on frontier)
+        spacing = self._compute_spacing(method_scores, pareto_methods, objectives)
+        
+        # Find knee points (balanced solutions)
+        knee_points = self._find_knee_points(method_scores, pareto_methods, objectives)
+        
+        # Create detailed analysis
+        frontier_analysis = {}
+        for method in pareto_methods:
+            scores = method_scores[method]
+            analysis = {
+                'scores': {obj: score if obj not in ['processing_time', 'cost'] else -score 
+                          for obj, score in zip(objectives, scores)},
+                'rank': 1,  # All Pareto optimal methods have rank 1
+                'dominated_by': [],
+                'dominates': [methods[j] for j in range(n_methods) 
+                             if any(dominance_matrix[i][j] for i in pareto_optimal 
+                                   if methods[i] == method)]
+            }
+            frontier_analysis[method] = analysis
+        
+        # Rank non-Pareto methods by domination count
+        dominated_methods = [methods[i] for i in range(n_methods) if i not in pareto_optimal]
+        for method in dominated_methods:
+            method_idx = methods.index(method)
+            domination_count = sum(1 for i in pareto_optimal if dominance_matrix[i][method_idx])
+            dominated_by = [methods[i] for i in pareto_optimal if dominance_matrix[i][method_idx]]
+            
+            frontier_analysis[method] = {
+                'scores': {obj: score if obj not in ['processing_time', 'cost'] else -score 
+                          for obj, score in zip(objectives, method_scores[method])},
+                'rank': domination_count + 1,
+                'dominated_by': dominated_by,
+                'dominates': []
+            }
+        
+        return {
+            'objectives': objectives,
+            'pareto_optimal_methods': pareto_methods,
+            'dominated_methods': dominated_methods,
+            'frontier_analysis': frontier_analysis,
+            'dominance_matrix': {methods[i]: {methods[j]: dominance_matrix[i][j] 
+                                            for j in range(n_methods)} 
+                               for i in range(n_methods)},
+            'metrics': {
+                'hypervolume': hypervolume,
+                'spacing': spacing,
+                'frontier_size': len(pareto_methods),
+                'total_methods': n_methods,
+                'frontier_ratio': len(pareto_methods) / n_methods if n_methods > 0 else 0
+            },
+            'knee_points': knee_points,
+            'recommendations': self._generate_pareto_recommendations(frontier_analysis, objectives)
+        }
+    
+    def _compute_hypervolume(self, 
+                           method_scores: Dict[str, List[float]], 
+                           pareto_methods: List[str], 
+                           objectives: List[str]) -> float:
+        """
+        Compute hypervolume indicator for Pareto frontier.
+        Higher hypervolume indicates better frontier quality.
+        """
+        if not pareto_methods:
+            return 0.0
+        
+        # Use a simple hypervolume approximation (Monte Carlo for >3D)
+        n_objectives = len(objectives)
+        
+        if n_objectives <= 3:
+            # For 2D/3D, we can compute exact hypervolume
+            # Simplified: use product of normalized ranges
+            min_scores = []
+            max_scores = []
+            
+            for obj_idx in range(n_objectives):
+                obj_scores = [method_scores[method][obj_idx] for method in pareto_methods]
+                min_scores.append(min(obj_scores))
+                max_scores.append(max(obj_scores))
+            
+            # Hypervolume as product of ranges (normalized)
+            hypervolume = 1.0
+            for i in range(n_objectives):
+                range_val = max_scores[i] - min_scores[i]
+                hypervolume *= max(range_val, 0.001)  # Avoid division by zero
+            
+            return hypervolume
+        else:
+            # For higher dimensions, approximate with volume of convex hull
+            return float(len(pareto_methods))  # Simplified approximation
+    
+    def _compute_spacing(self, 
+                       method_scores: Dict[str, List[float]], 
+                       pareto_methods: List[str], 
+                       objectives: List[str]) -> float:
+        """
+        Compute spacing metric for Pareto frontier.
+        Lower spacing indicates more evenly distributed solutions.
+        """
+        if len(pareto_methods) < 2:
+            return 0.0
+        
+        # Compute pairwise distances between Pareto optimal solutions
+        distances = []
+        for i, method1 in enumerate(pareto_methods):
+            min_distance = float('inf')
+            scores1 = method_scores[method1]
+            
+            for j, method2 in enumerate(pareto_methods):
+                if i != j:
+                    scores2 = method_scores[method2]
+                    # Euclidean distance in objective space
+                    distance = sum((s1 - s2) ** 2 for s1, s2 in zip(scores1, scores2)) ** 0.5
+                    min_distance = min(min_distance, distance)
+            
+            distances.append(min_distance)
+        
+        # Spacing is standard deviation of distances
+        mean_distance = sum(distances) / len(distances)
+        variance = sum((d - mean_distance) ** 2 for d in distances) / len(distances)
+        
+        return variance ** 0.5
+    
+    def _find_knee_points(self, 
+                        method_scores: Dict[str, List[float]], 
+                        pareto_methods: List[str], 
+                        objectives: List[str]) -> List[str]:
+        """
+        Find knee points on Pareto frontier - solutions with best trade-offs.
+        """
+        if len(pareto_methods) < 2:
+            return pareto_methods
+        
+        # For multi-objective problems, knee points are solutions with maximum
+        # distance from utopia and nadir points
+        
+        # Find utopia point (best possible in each objective)
+        utopia = []
+        nadir = []
+        
+        for obj_idx in range(len(objectives)):
+            obj_scores = [method_scores[method][obj_idx] for method in pareto_methods]
+            utopia.append(max(obj_scores))
+            nadir.append(min(obj_scores))
+        
+        # Find solutions with maximum distance from line connecting utopia to nadir
+        knee_points = []
+        max_distance = 0
+        
+        for method in pareto_methods:
+            scores = method_scores[method]
+            
+            # Normalize scores to [0, 1] range
+            normalized_scores = []
+            for i, score in enumerate(scores):
+                if utopia[i] != nadir[i]:
+                    norm_score = (score - nadir[i]) / (utopia[i] - nadir[i])
+                else:
+                    norm_score = 0.5  # If no variation, put in middle
+                normalized_scores.append(norm_score)
+            
+            # Distance from origin to point (knee-ness measure)
+            distance = sum(s ** 2 for s in normalized_scores) ** 0.5
+            
+            if distance > max_distance:
+                max_distance = distance
+                knee_points = [method]
+            elif abs(distance - max_distance) < 1e-6:
+                knee_points.append(method)
+        
+        return knee_points
+    
+    def _generate_pareto_recommendations(self, 
+                                       frontier_analysis: Dict[str, Dict], 
+                                       objectives: List[str]) -> Dict[str, str]:
+        """Generate recommendations based on Pareto frontier analysis."""
+        recommendations = {}
+        
+        pareto_methods = [method for method, analysis in frontier_analysis.items() 
+                         if analysis['rank'] == 1]
+        
+        if not pareto_methods:
+            recommendations['overall'] = "No methods found on Pareto frontier"
+            return recommendations
+        
+        # Best in individual objectives
+        for obj in objectives:
+            if obj in ['processing_time', 'cost']:
+                # For time/cost, lower is better (scores were negated)
+                best_method = min(pareto_methods, 
+                                key=lambda m: frontier_analysis[m]['scores'][obj])
+                recommendations[f'best_{obj}'] = f"{best_method} (lowest {obj.replace('_', ' ')})"
+            else:
+                # For quality metrics, higher is better
+                best_method = max(pareto_methods, 
+                                key=lambda m: frontier_analysis[m]['scores'][obj])
+                recommendations[f'best_{obj}'] = f"{best_method} (highest {obj.replace('_', ' ')})"
+        
+        # Balanced recommendation (if multiple Pareto optimal)
+        if len(pareto_methods) > 1:
+            # Find method with best average normalized performance
+            best_balanced = None
+            best_avg = -float('inf')
+            
+            for method in pareto_methods:
+                scores = frontier_analysis[method]['scores']
+                avg_score = sum(scores.values()) / len(scores)
+                if avg_score > best_avg:
+                    best_avg = avg_score
+                    best_balanced = method
+            
+            recommendations['balanced'] = f"{best_balanced} (best overall trade-off)"
+        
+        return recommendations
+    
+    def generate_pareto_report(self, pareto_results: Dict[str, Any]) -> str:
+        """Generate a human-readable Pareto frontier analysis report."""
+        report = []
+        report.append("=" * 80)
+        report.append("PARETO FRONTIER ANALYSIS")
+        report.append("=" * 80)
+        
+        objectives = pareto_results['objectives']
+        pareto_methods = pareto_results['pareto_optimal_methods']
+        dominated_methods = pareto_results['dominated_methods']
+        metrics = pareto_results['metrics']
+        
+        report.append(f"Objectives: {', '.join(objectives)}")
+        report.append(f"Total Methods Evaluated: {metrics['total_methods']}")
+        report.append(f"Pareto Optimal Methods: {metrics['frontier_size']}")
+        report.append(f"Frontier Efficiency: {metrics['frontier_ratio']:.2%}")
+        report.append("")
+        
+        # Pareto optimal methods
+        report.append("🏆 PARETO OPTIMAL METHODS (Non-dominated):")
+        report.append("-" * 60)
+        frontier_analysis = pareto_results['frontier_analysis']
+        
+        for method in pareto_methods:
+            analysis = frontier_analysis[method]
+            report.append(f"\n{method}:")
+            for obj, score in analysis['scores'].items():
+                if obj in ['processing_time', 'cost']:
+                    report.append(f"  {obj.replace('_', ' ').title()}: {score:.4f}")
+                else:
+                    report.append(f"  {obj.replace('_', ' ').title()}: {score:.4f}")
+        
+        # Dominated methods
+        if dominated_methods:
+            report.append("\n" + "❌ DOMINATED METHODS:")
+            report.append("-" * 60)
+            for method in dominated_methods:
+                analysis = frontier_analysis[method]
+                report.append(f"\n{method} (Rank {analysis['rank']}):")
+                report.append(f"  Dominated by: {', '.join(analysis['dominated_by'])}")
+        
+        # Recommendations
+        recommendations = pareto_results['recommendations']
+        report.append("\n" + "💡 RECOMMENDATIONS:")
+        report.append("-" * 60)
+        for rec_type, recommendation in recommendations.items():
+            report.append(f"  {rec_type.replace('_', ' ').title()}: {recommendation}")
+        
+        # Knee points
+        knee_points = pareto_results['knee_points']
+        if knee_points:
+            report.append(f"\n🎯 KNEE POINTS (Best Trade-offs): {', '.join(knee_points)}")
+        
+        # Metrics
+        report.append("\n" + "📊 FRONTIER QUALITY METRICS:")
+        report.append("-" * 60)
+        report.append(f"  Hypervolume: {metrics['hypervolume']:.4f}")
+        report.append(f"  Spacing: {metrics['spacing']:.4f}")
+        report.append(f"  Diversity: {len(pareto_methods)} solutions")
+        
+        report.append("\n" + "=" * 80)
+        report.append("METHODOLOGY:")
+        report.append("• Pareto optimality: A method is optimal if no other method")
+        report.append("  dominates it in ALL objectives simultaneously")
+        report.append("• Hypervolume: Measures volume dominated by Pareto frontier")
+        report.append("• Spacing: Measures distribution evenness of frontier solutions")
+        report.append("• Knee points: Solutions with best trade-offs between objectives")
+        report.append("=" * 80)
         
         return "\n".join(report)
