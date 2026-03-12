@@ -2,18 +2,8 @@ import time
 import os
 from typing import Dict, Any, Optional
 
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    openai = None
-    OPENAI_AVAILABLE = False
-
-try:
-    from dotenv import load_dotenv
-    DOTENV_AVAILABLE = True
-except ImportError:
-    DOTENV_AVAILABLE = False
+import openai
+from dotenv import load_dotenv
 
 from .traditional import BaseSummarizer
 

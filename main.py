@@ -8,8 +8,7 @@ This script benchmarks various text summarization techniques including:
 3. Gemini API
 
 Datasets: CNN/DailyMail, arXiv scientific papers, WikiHow
-Metrics: ROUGE scores, BERTScore
-Computing: AWS Lambda simulation (optional)
+Metrics: ROUGE scores, BERTScore, BLEURT
 """
 
 import argparse
@@ -30,43 +29,32 @@ def main():
     
     parser = argparse.ArgumentParser(description='Text Summarization Benchmarking Tool')
     parser.add_argument('--datasets', nargs='+', default=['cnn_dailymail'], 
-                       choices=['cnn_dailymail', 'arxiv', 'wikihow', 'govreport', 'mediasum'], #, 'samsum', 'qmsum', 'callsum'],
+                       choices=['cnn_dailymail', 'arxiv', 'wikihow', 'govreport', 'mediasum'], 
                        help='Datasets to benchmark on')
     parser.add_argument('--methods', nargs='+', 
-                       default=['textrank', 'tfidfrank', 
-                                'distilbart', 'bart', 
-                                'gemini', 'GPT-5-mini'],
-                       choices=['textrank', 'tfidfrank', 't5', 'distilbart', 'bart', 'gemini', 'GPT-5-mini', 'hybrid_textrank_gemini', 'hybrid_tfidfrank_gemini'],
+                       default=['textrank', 'tfidfrank', 'distilbart', 'bart', 'gemini', 'GPT-5-mini'],
+                       choices=['textrank', 'tfidfrank', 'distilbart', 'bart', 'gemini', 'GPT-5-mini'],
                        help='Summarization methods to benchmark')
     parser.add_argument('--max-samples', type=int, default=0,
                        help='Maximum number of samples per dataset')
     parser.add_argument('--max-sentences', type=int, default=3,
                        help='Maximum sentences in summary')
-    parser.add_argument('--use-lambda', action='store_true', default=False,
-                       help='Use AWS Lambda simulation')
     parser.add_argument('--output', type=str, default='benchmark_results.csv',
                        help='Output file for results (csv or json)')
-    parser.add_argument('--gemini-api-key', type=str,
-                       help='Gemini API key (or set GEMINI_API_KEY env var)')
     
     args = parser.parse_args()
-    
-    # Set Gemini API key if provided
-    if args.gemini_api_key:
-        os.environ['GEMINI_API_KEY'] = args.gemini_api_key
-    
+        
     print("🔬 Text Summarization Benchmarking Tool")
     print("=" * 50)
     print(f"Datasets: {', '.join(args.datasets)}")
     print(f"Methods: {', '.join(args.methods)}")
     print(f"Max samples per dataset: {args.max_samples}")
     print(f"Max sentences per summary: {args.max_sentences}")
-    print(f"AWS Lambda simulation: {'Enabled' if args.use_lambda else 'Disabled'}")
     print(f"Output file: {args.output}")
     print()
     
     # Initialize benchmark framework
-    framework = BenchmarkFramework(use_lambda_simulation=args.use_lambda)
+    framework = BenchmarkFramework()
     
     # Run comprehensive benchmark
     try:

@@ -8,11 +8,10 @@ from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
 from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer
-from .summarizers.gemini import GeminiSummarizer, HybridTFIDFRankGeminiSummarizer, HybridTextRankGeminiSummarizer
+from .summarizers.gemini import GeminiSummarizer
 from .summarizers.openai_gpt import GPT5MiniSummarizer
 from .dataset_loader import DatasetLoader
 from .evaluation_metrics import EvaluationMetrics
-from .lambda_simulation import LambdaSimulator
 
 
 @dataclass
@@ -32,8 +31,7 @@ class BenchmarkResult:
 
 
 class BenchmarkFramework:
-    def __init__(self, use_lambda_simulation: bool = True):
-        self.use_lambda_simulation = use_lambda_simulation
+    def __init__(self):
         self.summarizers = {}
         self.evaluator = EvaluationMetrics()
         self.results = []
@@ -52,11 +50,8 @@ class BenchmarkFramework:
         self.heavy_model_classes = {
             'distilbart': lambda: DistilBARTSummarizer(),
             'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
-            't5': lambda: T5Summarizer(),
             'gemini': lambda: GeminiSummarizer(),
             'GPT-5-mini': lambda: GPT5MiniSummarizer(),
-            'hybrid_textrank_gemini': lambda: HybridTextRankGeminiSummarizer(),
-            'hybrid_tfidfrank_gemini': lambda: HybridTFIDFRankGeminiSummarizer()
         }
     
     def benchmark_method(self, 
@@ -97,21 +92,12 @@ class BenchmarkFramework:
         print(f"Benchmarking {method_name} on {len(dataset_samples)} samples...")
         
         for sample in tqdm(dataset_samples, desc=f"Processing {method_name}"):
-            if self.use_lambda_simulation and method_name in ['textrank', 'tfidfrank']:
-                with LambdaSimulator() as lambda_sim:
-                    result = lambda_sim.benchmark_summarizer_in_lambda(
-                        sample['article'], method_name, max_sentences
-                    )
-                    summary = f"Lambda-processed summary for {method_name}"
-                    time_taken = result['total_time']
-                    cost = 0.001  # Lambda cost simulation
-            else:
-                benchmark_result = summarizer.benchmark_summarize(
-                    sample['article'], max_sentences
-                )
-                summary = benchmark_result['summary']
-                time_taken = benchmark_result['time_taken']
-                cost = benchmark_result.get('cost', 0.0)
+            benchmark_result = summarizer.benchmark_summarize(
+                sample['article'], max_sentences
+            )
+            summary = benchmark_result['summary']
+            time_taken = benchmark_result['time_taken']
+            cost = benchmark_result.get('cost', 0.0)
             
             summaries.append(summary)
             references.append(sample['reference_summary'])

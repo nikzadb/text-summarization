@@ -93,55 +93,6 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
             print(f"Warning: Error during cleanup of {self.name}: {e}")
 
 
-class T5Summarizer(OpenSourceLLMSummarizer):
-    def __init__(self):
-        self.model_name = "t5-small"
-        BaseSummarizer.__init__(self, "T5-small")
-        self._load_model()
-    
-    def _load_model(self):
-        try:
-            # Check for GPU support (CUDA or MPS)
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-            print(f"Using device for T5: {device}")
-            
-            self.pipeline = pipeline(
-                "summarization", 
-                model=self.model_name,
-                device=device,
-                framework="pt"
-            )
-        except Exception as e:
-            print(f"Error loading T5 model: {e}")
-            raise
-    
-    def summarize(self, text: str, max_sentences: int = 3) -> str:
-        if not self.pipeline:
-            raise RuntimeError("Model not loaded")
-        
-        prefixed_text = f"summarize: {text}"
-        max_length = max_sentences * 30
-        min_length = max_sentences * 10
-        
-        try:
-            result = self.pipeline(
-                prefixed_text,
-                max_length=max_length,
-                min_length=min_length,
-                do_sample=False,
-                truncation=True
-            )
-            return result[0]['summary_text']
-        except Exception as e:
-            sentences = text.split('.')[:max_sentences]
-            return '. '.join(sentences) + '.'
-
-
 class DistilBARTSummarizer(OpenSourceLLMSummarizer):
     def __init__(self):
         super().__init__("sshleifer/distilbart-cnn-12-6")
