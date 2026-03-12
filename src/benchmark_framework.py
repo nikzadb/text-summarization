@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
-from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer
+from .summarizers.llm import BARTSummarizer, DistilBARTSummarizer
 from .summarizers.gemini import GeminiSummarizer
 from .summarizers.openai_gpt import GPT5MiniSummarizer
 from .dataset_loader import DatasetLoader
@@ -24,7 +24,8 @@ class BenchmarkResult:
     rouge2_f1: float
     rougeL_f1: float
     bert_f1: float
-    combined_score: float
+    bleurt_score: float
+    combined_zscore: float
     sample_count: int
     total_time: float
     total_cost: float
@@ -49,7 +50,7 @@ class BenchmarkFramework:
         # Define heavy models that require on-demand loading
         self.heavy_model_classes = {
             'distilbart': lambda: DistilBARTSummarizer(),
-            'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
+            'bart': lambda: BARTSummarizer('facebook/bart-large-cnn'),
             'gemini': lambda: GeminiSummarizer(),
             'GPT-5-mini': lambda: GPT5MiniSummarizer(),
         }
@@ -132,7 +133,8 @@ class BenchmarkFramework:
                 'rougeL_f1': individual_scores['rougeL_f1'][i],
                 'bert_precision': individual_scores['bert_precision'][i],
                 'bert_recall': individual_scores['bert_recall'][i],
-                'bert_f1': individual_scores['bert_f1'][i]
+                'bert_f1': individual_scores['bert_f1'][i],
+                'bleurt_score': individual_scores['bleurt_score'][i]
             }
             detailed_data.append(sample_data)
         
@@ -151,7 +153,8 @@ class BenchmarkFramework:
             rouge2_f1=summary_stats['rouge2_f1'],
             rougeL_f1=summary_stats['rougeL_f1'],
             bert_f1=summary_stats['bert_f1'],
-            combined_score=summary_stats['combined_score'],
+            bleurt_score=summary_stats['bleurt_score'],
+            combined_zscore=summary_stats['combined_zscore'],
             sample_count=len(dataset_samples),
             total_time=sum(times),
             total_cost=sum(costs)
@@ -240,6 +243,7 @@ class BenchmarkFramework:
             return pd.DataFrame()
         
         data = []
+
         for result in self.results:
             data.append({
                 'Method': result.method,
@@ -248,7 +252,8 @@ class BenchmarkFramework:
                 'ROUGE-2 F1': result.rouge2_f1,
                 'ROUGE-L F1': result.rougeL_f1,
                 'BERT F1': result.bert_f1,
-                'Combined Score': result.combined_score,
+                'BLEURT Score': result.bleurt_score,
+                'Combined Zscore': result.combined_zscore,
                 'Avg Time (s)': result.avg_time,
                 'Avg Cost ($)': result.avg_cost,
                 'Total Time (s)': result.total_time,
@@ -326,6 +331,8 @@ class BenchmarkFramework:
                             'rouge2_f1': detailed_df['rouge2_f1'].tolist(),
                             'rougeL_f1': detailed_df['rougeL_f1'].tolist(),
                             'bert_f1': detailed_df['bert_f1'].tolist(),
+                            'bleurt_score': detailed_df['bleurt_score'].tolist(),
+                            'combined_zscore': detailed_df['combined_zscore'].tolist(),
                             'processing_time': detailed_df['processing_time'].tolist(),
                             'cost': detailed_df['cost'].tolist()
                         }
@@ -442,8 +449,10 @@ class BenchmarkFramework:
                         base_col = 'ROUGE-L F1'
                     elif metric_key == 'bert_f1':
                         base_col = 'BERT F1'
-                    elif metric_key == 'combined_score':
-                        base_col = 'Combined Score'
+                    elif metric_key == 'bleurt_score':
+                        base_col = 'BLEURT Score'
+                    elif metric_key == 'combined_zscore':
+                        base_col = 'Combined Zscore'
                     elif metric_key == 'processing_time':
                         base_col = 'Avg Time (s)'
                     elif metric_key == 'cost':
@@ -469,7 +478,7 @@ class BenchmarkFramework:
                     test_info = analysis['statistical_tests'][method]
                     metric_name = analysis['metric_name']
                     
-                    if metric_key == 'combined_score':  # Use combined score as primary significance indicator
+                    if metric_key == 'combined_zscore':  # Use combined score as primary significance indicator
                         row_data['Is Best Method'] = test_info['is_best']
                         row_data['P-value vs Best'] = test_info['p_value'] if test_info['p_value'] is not None else 'N/A'
                         row_data['Effect Size'] = test_info['effect_size']

@@ -5,7 +5,7 @@ from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from .traditional import BaseSummarizer
 
 
-class OpenSourceLLMSummarizer(BaseSummarizer):
+class BARTSummarizer(BaseSummarizer):
     def __init__(self, model_name: str = "facebook/bart-large-cnn"):
         super().__init__(f"OpenSource-{model_name.split('/')[-1]}")
         self.model_name = model_name
@@ -93,6 +93,6 @@ class OpenSourceLLMSummarizer(BaseSummarizer):
             print(f"Warning: Error during cleanup of {self.name}: {e}")
 
 
-class DistilBARTSummarizer(OpenSourceLLMSummarizer):
+class DistilBARTSummarizer(BARTSummarizer):
     def __init__(self):
         super().__init__("sshleifer/distilbart-cnn-12-6")

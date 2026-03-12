@@ -213,80 +213,31 @@ class EvaluationMetrics:
                 z_scores[metric_name] = np.array([])
         
         # Compute combined Z-scores
-        rouge_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1']
-        all_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1']
-        all_with_bleurt = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
-        
-        # Combined ROUGE Z-scores
-        rouge_z_combined = np.zeros(len(z_scores['rouge1_f1']))
-        rouge_count = 0
-        for metric in rouge_metrics:
-            if len(z_scores[metric]) > 0:
-                rouge_z_combined += z_scores[metric]
-                rouge_count += 1
-        if rouge_count > 0:
-            rouge_z_combined /= rouge_count
-        
-        # Combined all metrics (ROUGE + BERT) Z-scores
-        all_z_combined = np.zeros(len(z_scores['rouge1_f1']))
-        all_count = 0
+        all_metrics = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+                
+        # Combined all metrics including BLEURT Z-scores
+        z_combined = np.zeros(len(z_scores['rouge1_f1']))
+        _count = 0
         for metric in all_metrics:
             if len(z_scores[metric]) > 0:
-                all_z_combined += z_scores[metric]
-                all_count += 1
-        if all_count > 0:
-            all_z_combined /= all_count
-        
-        # Combined all metrics including BLEURT Z-scores
-        bleurt_z_combined = np.zeros(len(z_scores['rouge1_f1']))
-        bleurt_count = 0
-        for metric in all_with_bleurt:
-            if len(z_scores[metric]) > 0:
-                bleurt_z_combined += z_scores[metric]
-                bleurt_count += 1
-        if bleurt_count > 0:
-            bleurt_z_combined /= bleurt_count
+                z_combined += z_scores[metric]
+                _count += 1
+        if _count > 0:
+            z_combined /= _count
         
         return {
-            # Individual Z-score statistics
-            'rouge1_f1_zscore_mean': np.mean(z_scores['rouge1_f1']) if len(z_scores['rouge1_f1']) > 0 else 0.0,
-            'rouge2_f1_zscore_mean': np.mean(z_scores['rouge2_f1']) if len(z_scores['rouge2_f1']) > 0 else 0.0,
-            'rougeL_f1_zscore_mean': np.mean(z_scores['rougeL_f1']) if len(z_scores['rougeL_f1']) > 0 else 0.0,
-            'bert_f1_zscore_mean': np.mean(z_scores['bert_f1']) if len(z_scores['bert_f1']) > 0 else 0.0,
-            'bleurt_score_zscore_mean': np.mean(z_scores['bleurt_score']) if len(z_scores['bleurt_score']) > 0 else 0.0,
-            
             # Combined Z-score metrics
-            'combined_zscore_rouge': np.mean(rouge_z_combined),
-            'combined_zscore_all': np.mean(all_z_combined),
-            'combined_zscore_with_bleurt': np.mean(bleurt_z_combined),
+            'combined_zscore': np.mean(z_combined),
             
             # Standard deviations of combined scores
-            'combined_zscore_rouge_std': np.std(rouge_z_combined),
-            'combined_zscore_all_std': np.std(all_z_combined), 
-            'combined_zscore_with_bleurt_std': np.std(bleurt_z_combined),
+            'combined_zscore_std': np.std(z_combined),
             
             # Raw Z-score arrays for further analysis
-            'rouge_z_scores': rouge_z_combined.tolist(),
-            'all_z_scores': all_z_combined.tolist(),
-            'bleurt_z_scores': bleurt_z_combined.tolist()
+            'z_scores': z_combined.tolist()
         }
 
     def get_summary_statistics(self, evaluation_results: Dict[str, Any]) -> Dict[str, float]:
         avg_scores = evaluation_results['average_scores']
-        
-        # Traditional simple averaging (backward compatibility)
-        traditional_combined = (
-            avg_scores.get('rouge1_f1_mean', 0.0) +
-            avg_scores.get('rouge2_f1_mean', 0.0) +
-            avg_scores.get('rougeL_f1_mean', 0.0)
-        ) / 3.0
-        
-        traditional_with_bleurt = (
-            avg_scores.get('rouge1_f1_mean', 0.0) +
-            avg_scores.get('rouge2_f1_mean', 0.0) +
-            avg_scores.get('rougeL_f1_mean', 0.0) +
-            avg_scores.get('bleurt_score_mean', 0.0)
-        ) / 4.0
         
         # Z-score based combining (statistically sound)
         zscore_metrics = self.compute_zscore_combined_metrics(evaluation_results)
@@ -299,19 +250,11 @@ class EvaluationMetrics:
             'bert_f1': avg_scores.get('bert_f1_mean', 0.0),
             'bleurt_score': avg_scores.get('bleurt_score_mean', 0.0),
             
-            # Traditional simple averaging (for backward compatibility)
-            'combined_score': traditional_combined,
-            'combined_score_with_bleurt': traditional_with_bleurt,
-            
             # Z-score aggregation (statistically sound)
-            'combined_zscore_rouge': zscore_metrics['combined_zscore_rouge'],
-            'combined_zscore_all': zscore_metrics['combined_zscore_all'],
-            'combined_zscore_with_bleurt': zscore_metrics['combined_zscore_with_bleurt'],
+            'combined_zscore': zscore_metrics['combined_zscore'],
             
             # Z-score standard deviations
-            'combined_zscore_rouge_std': zscore_metrics['combined_zscore_rouge_std'],
-            'combined_zscore_all_std': zscore_metrics['combined_zscore_all_std'],
-            'combined_zscore_with_bleurt_std': zscore_metrics['combined_zscore_with_bleurt_std']
+            'combined_zscore_std': zscore_metrics['combined_zscore_std']
         }
     
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
@@ -371,136 +314,6 @@ class EvaluationMetrics:
             'ci_upper': upper_bound,
             'std_error': np.std(bootstrap_means),
             'n_samples': n_samples,
-            'confidence_level': confidence_level
-        }
-    
-    def statistical_comparison(self, 
-                             method_results: Dict[str, Dict[str, Any]], 
-                             dataset_name: str,
-                             metric: str = 'combined_score',
-                             n_bootstrap: int = 1000,
-                             confidence_level: float = 0.95) -> Dict[str, Any]:
-        """
-        Perform statistical comparison between methods using bootstrap confidence intervals.
-        
-        Process:
-        1. Calculate combined_score for each sample for each method
-        2. Find the best performing method (highest mean combined_score)
-        3. Calculate bootstrap confidence intervals for all methods
-        4. Perform pairwise statistical tests against the best method
-        5. Determine statistical significance based on CI overlap and permutation tests
-        
-        Args:
-            method_results: Dictionary mapping method names to evaluation results
-            dataset_name: Name of the dataset being analyzed
-            metric: Metric to use for comparison ('combined_score', 'rouge1_f1', etc.)
-            n_bootstrap: Number of bootstrap samples
-            confidence_level: Confidence level for CI
-        
-        Returns:
-            Statistical analysis results including best method and comparisons
-        """
-        
-        # Calculate individual combined scores for each method
-        method_scores = {}
-        for method_name, results in method_results.items():
-            individual_scores = results['individual_scores']
-            
-            if metric == 'combined_score':
-                # Calculate combined score for each sample
-                rouge1_scores = individual_scores['rouge1_f1']
-                rouge2_scores = individual_scores['rouge2_f1']
-                rougeL_scores = individual_scores['rougeL_f1']
-                
-                combined_scores = [(r1 + r2 + rl) / 3.0 
-                                 for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
-                method_scores[method_name] = combined_scores
-            elif metric == 'combined_score_with_bleurt':
-                # Calculate combined score including BLEURT for each sample
-                rouge1_scores = individual_scores['rouge1_f1']
-                rouge2_scores = individual_scores['rouge2_f1']
-                rougeL_scores = individual_scores['rougeL_f1']
-                bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
-                
-                combined_scores = [(r1 + r2 + rl + b) / 4.0 
-                                 for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
-                method_scores[method_name] = combined_scores
-            elif metric.startswith('combined_zscore'):
-                # For Z-score metrics, compute them from the evaluation results
-                eval_results = {'individual_scores': individual_scores}
-                zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
-                
-                if metric == 'combined_zscore_rouge':
-                    method_scores[method_name] = zscore_metrics['rouge_z_scores']
-                elif metric == 'combined_zscore_all':
-                    method_scores[method_name] = zscore_metrics['all_z_scores']
-                elif metric == 'combined_zscore_with_bleurt':
-                    method_scores[method_name] = zscore_metrics['bleurt_z_scores']
-            else:
-                method_scores[method_name] = individual_scores[metric]
-        
-        # Find best performing method
-        method_means = {method: np.mean(scores) for method, scores in method_scores.items()}
-        best_method = max(method_means.keys(), key=lambda k: method_means[k])
-        best_scores = method_scores[best_method]
-        
-        # Calculate bootstrap CIs for all methods
-        bootstrap_results = {}
-        for method_name, scores in method_scores.items():
-            bootstrap_results[method_name] = self.bootstrap_confidence_interval(
-                scores, n_bootstrap, confidence_level
-            )
-        
-        # Perform statistical tests against best method
-        statistical_tests = {}
-        for method_name, scores in method_scores.items():
-            if method_name == best_method:
-                statistical_tests[method_name] = {
-                    'is_best': True,
-                    'p_value': None,
-                    'effect_size': 0.0,
-                    'significantly_different': False,
-                    'interpretation': 'Best performing method'
-                }
-            else:
-                # Permutation test for statistical significance
-                p_value = self._permutation_test(best_scores, scores)
-                effect_size = (method_means[best_method] - method_means[method_name]) / np.std(best_scores)
-                
-                # Check CI overlap
-                best_ci = bootstrap_results[best_method]
-                method_ci = bootstrap_results[method_name]
-                ci_overlap = not (method_ci['ci_upper'] < best_ci['ci_lower'] or 
-                                method_ci['ci_lower'] > best_ci['ci_upper'])
-                
-                significantly_different = p_value < (1 - confidence_level) or not ci_overlap
-                
-                if significantly_different:
-                    if method_means[method_name] < method_means[best_method]:
-                        interpretation = f"Significantly worse than {best_method}"
-                    else:
-                        interpretation = f"Significantly better than {best_method}"
-                else:
-                    interpretation = f"No significant difference from {best_method}"
-                
-                statistical_tests[method_name] = {
-                    'is_best': False,
-                    'p_value': p_value,
-                    'effect_size': effect_size,
-                    'significantly_different': significantly_different,
-                    'ci_overlap': ci_overlap,
-                    'interpretation': interpretation
-                }
-        
-        return {
-            'dataset': dataset_name,
-            'metric': metric,
-            'best_method': best_method,
-            'best_method_score': method_means[best_method],
-            'method_scores': method_means,
-            'bootstrap_results': bootstrap_results,
-            'statistical_tests': statistical_tests,
-            'n_bootstrap': n_bootstrap,
             'confidence_level': confidence_level
         }
     
@@ -634,11 +447,7 @@ class EvaluationMetrics:
             'rougeL_f1': 'ROUGE-L F1',
             'bert_f1': 'BERT F1',
             'bleurt_score': 'BLEURT Score',
-            'combined_score': 'Combined Score (Simple Average)',
-            'combined_score_with_bleurt': 'Combined Score with BLEURT (Simple Average)',
-            'combined_zscore_rouge': 'Combined Z-Score (ROUGE Only)',
-            'combined_zscore_all': 'Combined Z-Score (All Metrics)',
-            'combined_zscore_with_bleurt': 'Combined Z-Score with BLEURT',
+            'combined_zscore': 'Combined Z-Score',
             'processing_time': 'Processing Time (s)',
             'cost': 'Cost ($)'
         }
@@ -657,27 +466,8 @@ class EvaluationMetrics:
             
             for method_name, results in method_results.items():
                 individual_scores = results['individual_scores']
-                
-                if metric_key == 'combined_score':
-                    # Calculate combined score for each sample
-                    rouge1_scores = individual_scores['rouge1_f1']
-                    rouge2_scores = individual_scores['rouge2_f1']
-                    rougeL_scores = individual_scores['rougeL_f1']
-                    
-                    combined_scores = [(r1 + r2 + rl) / 3.0 
-                                     for r1, r2, rl in zip(rouge1_scores, rouge2_scores, rougeL_scores)]
-                    method_scores[method_name] = combined_scores
-                elif metric_key == 'combined_score_with_bleurt':
-                    # Calculate combined score including BLEURT for each sample
-                    rouge1_scores = individual_scores['rouge1_f1']
-                    rouge2_scores = individual_scores['rouge2_f1']
-                    rougeL_scores = individual_scores['rougeL_f1']
-                    bleurt_scores = individual_scores.get('bleurt_score', [0.0] * len(rouge1_scores))
-                    
-                    combined_scores = [(r1 + r2 + rl + b) / 4.0 
-                                     for r1, r2, rl, b in zip(rouge1_scores, rouge2_scores, rougeL_scores, bleurt_scores)]
-                    method_scores[method_name] = combined_scores
-                elif metric_key.startswith('combined_zscore'):
+
+                if metric_key.startswith('combined_zscore'):
                     # For Z-score metrics, we need to compute them from the evaluation results
                     eval_results = {'individual_scores': individual_scores}
                     zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
