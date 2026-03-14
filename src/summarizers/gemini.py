@@ -118,35 +118,3 @@ class GeminiSummarizer(BaseSummarizer):
             print(f"✓ Cleaned up {self.name} model resources")
         except Exception as e:
             print(f"Warning: Error during cleanup of {self.name}: {e}")
-
-
-class _HybridBase(BaseSummarizer):
-    """Shared logic for Extract-then-Abstract (E2A) pipelines."""
-
-    def __init__(self, name: str, gemini: GeminiSummarizer, extract_k_map: Optional[dict] = None):
-        super().__init__(name)
-        self.gemini = gemini
-        self.extract_k_map = extract_k_map or {"cnn_dailymail": 15, "arxiv": 50}
-        self.extract_k = self.extract_k_map.get("cnn_dailymail", 15)
-
-    def set_dataset(self, dataset_name: str):
-        # Called by BenchmarkFramework to ensure consistent regime configuration.
-        self.extract_k = self.extract_k_map.get(dataset_name, self.extract_k)
-
-    def _bench(self, intermediate_summary: str, max_sentences: int) -> Dict[str, Any]:
-        gemini_start = time.time()
-        final_summary = self.gemini.summarize(intermediate_summary, max_sentences)
-        gemini_time = time.time() - gemini_start
-
-        # Cost is based on Gemini call only (approx tokens on intermediate input + final output)
-        input_tokens = self.gemini._estimate_tokens(intermediate_summary)
-        output_tokens = self.gemini._estimate_tokens(final_summary)
-        cost = (input_tokens / 1000.0) * self.gemini.input_price_per_1k + (output_tokens / 1000.0) * self.gemini.output_price_per_1k
-
-        return {
-            "final_summary": final_summary,
-            "gemini_time": gemini_time,
-            "cost": cost,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        }

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 from .summarizers.traditional import TextRankSummarizer, TFIDFRankSummarizer
-from .summarizers.llm import OpenSourceLLMSummarizer, T5Summarizer, DistilBARTSummarizer
+from .summarizers.llm import BARTSummarizer, DistilBARTSummarizer
 from .summarizers.gemini import GeminiSummarizer
 from .summarizers.openai_gpt import GPT5MiniSummarizer
 from .dataset_loader import DatasetLoader
@@ -24,7 +24,8 @@ class BenchmarkResult:
     rouge2_f1: float
     rougeL_f1: float
     bert_f1: float
-    combined_score: float
+    bleurt_score: float
+    combined_zscore: float
     sample_count: int
     total_time: float
     total_cost: float
@@ -49,7 +50,7 @@ class BenchmarkFramework:
         # Define heavy models that require on-demand loading
         self.heavy_model_classes = {
             'distilbart': lambda: DistilBARTSummarizer(),
-            'bart': lambda: OpenSourceLLMSummarizer('facebook/bart-large-cnn'),
+            'bart': lambda: BARTSummarizer('facebook/bart-large-cnn'),
             'gemini': lambda: GeminiSummarizer(),
             'GPT-5-mini': lambda: GPT5MiniSummarizer(),
         }
@@ -132,7 +133,8 @@ class BenchmarkFramework:
                 'rougeL_f1': individual_scores['rougeL_f1'][i],
                 'bert_precision': individual_scores['bert_precision'][i],
                 'bert_recall': individual_scores['bert_recall'][i],
-                'bert_f1': individual_scores['bert_f1'][i]
+                'bert_f1': individual_scores['bert_f1'][i],
+                'bleurt_score': individual_scores['bleurt_score'][i]
             }
             detailed_data.append(sample_data)
         
@@ -151,7 +153,8 @@ class BenchmarkFramework:
             rouge2_f1=summary_stats['rouge2_f1'],
             rougeL_f1=summary_stats['rougeL_f1'],
             bert_f1=summary_stats['bert_f1'],
-            combined_score=summary_stats['combined_score'],
+            bleurt_score=summary_stats['bleurt_score'],
+            combined_zscore=summary_stats['combined_zscore'],
             sample_count=len(dataset_samples),
             total_time=sum(times),
             total_cost=sum(costs)
@@ -240,6 +243,7 @@ class BenchmarkFramework:
             return pd.DataFrame()
         
         data = []
+
         for result in self.results:
             data.append({
                 'Method': result.method,
@@ -248,7 +252,8 @@ class BenchmarkFramework:
                 'ROUGE-2 F1': result.rouge2_f1,
                 'ROUGE-L F1': result.rougeL_f1,
                 'BERT F1': result.bert_f1,
-                'Combined Score': result.combined_score,
+                'BLEURT Score': result.bleurt_score,
+                'Combined Zscore': result.combined_zscore,
                 'Avg Time (s)': result.avg_time,
                 'Avg Cost ($)': result.avg_cost,
                 'Total Time (s)': result.total_time,
@@ -282,7 +287,7 @@ class BenchmarkFramework:
         print(df.to_string(index=False, float_format='{:.4f}'.format))
         
         print("\n=== TOP PERFORMERS BY METRIC ===")
-        for metric in ['Combined Score', 'ROUGE-1 F1', 'BERT F1', 'Avg Time (s)', 'Avg Cost ($)']:
+        for metric in ['Combined Zscore', 'ROUGE-1 F1', 'BERT F1', 'Avg Time (s)', 'Avg Cost ($)']:
             if metric in ['Avg Time (s)', 'Avg Cost ($)']:
                 best = df.loc[df[metric].idxmin()]
                 print(f"Best {metric}: {best['Method']} ({best[metric]:.6f})")
@@ -326,9 +331,14 @@ class BenchmarkFramework:
                             'rouge2_f1': detailed_df['rouge2_f1'].tolist(),
                             'rougeL_f1': detailed_df['rougeL_f1'].tolist(),
                             'bert_f1': detailed_df['bert_f1'].tolist(),
+                            'bleurt_score': detailed_df['bleurt_score'].tolist(),
                             'processing_time': detailed_df['processing_time'].tolist(),
                             'cost': detailed_df['cost'].tolist()
                         }
+                        
+                        # Add combined_zscore if it exists in the CSV, otherwise skip
+                        if 'combined_zscore' in detailed_df.columns:
+                            individual_scores['combined_zscore'] = detailed_df['combined_zscore'].tolist()
                         
                         # Calculate average scores for compatibility
                         average_scores = {}
@@ -356,9 +366,20 @@ class BenchmarkFramework:
                 print("=" * 50)
                 
                 try:
+                    # Calculate cross-method z-scores for meaningful comparison
+                    print("\n📊 Computing cross-method z-scores...")
+                    cross_method_zscores = self.evaluator.compute_cross_method_zscore(method_results)
+                    
+                    # Update the results with the corrected combined z-scores
+                    for result in self.results:
+                        if result.dataset == dataset_name and result.method in cross_method_zscores:
+                            new_combined_zscore = cross_method_zscores[result.method]['combined_zscore']
+                            result.combined_zscore = new_combined_zscore
+                            print(f"✅ Updated {result.method}: combined_zscore = {new_combined_zscore:.4f}")
+                    
                     # Perform comprehensive statistical analysis for ALL metrics
                     comprehensive_results = self.evaluator.comprehensive_statistical_analysis(
-                        method_results, dataset_name
+                        method_results, dataset_name, cross_method_zscores=cross_method_zscores
                     )
                     
                     # Generate and display comprehensive report
@@ -442,8 +463,10 @@ class BenchmarkFramework:
                         base_col = 'ROUGE-L F1'
                     elif metric_key == 'bert_f1':
                         base_col = 'BERT F1'
-                    elif metric_key == 'combined_score':
-                        base_col = 'Combined Score'
+                    elif metric_key == 'bleurt_score':
+                        base_col = 'BLEURT Score'
+                    elif metric_key == 'combined_zscore':
+                        base_col = 'Combined Zscore'
                     elif metric_key == 'processing_time':
                         base_col = 'Avg Time (s)'
                     elif metric_key == 'cost':
@@ -469,7 +492,7 @@ class BenchmarkFramework:
                     test_info = analysis['statistical_tests'][method]
                     metric_name = analysis['metric_name']
                     
-                    if metric_key == 'combined_score':  # Use combined score as primary significance indicator
+                    if metric_key == 'combined_zscore':  # Use combined score as primary significance indicator
                         row_data['Is Best Method'] = test_info['is_best']
                         row_data['P-value vs Best'] = test_info['p_value'] if test_info['p_value'] is not None else 'N/A'
                         row_data['Effect Size'] = test_info['effect_size']
@@ -481,8 +504,13 @@ class BenchmarkFramework:
             # Create DataFrame and save to CSV
             enhanced_df = pd.DataFrame(enhanced_data)
             
-            # Sort by combined score (descending) for readability
-            enhanced_df = enhanced_df.sort_values('Combined Score', ascending=False)
+            # Sort by combined score (descending) for readability if column exists
+            if 'Combined Zscore' in enhanced_df.columns:
+                enhanced_df = enhanced_df.sort_values('Combined Zscore', ascending=False)
+            elif 'ROUGE-1 F1' in enhanced_df.columns:
+                enhanced_df = enhanced_df.sort_values('ROUGE-1 F1', ascending=False)
+            else:
+                print("⚠️  No suitable column for sorting found")
             
             # Save to CSV with proper formatting
             enhanced_df.to_csv(filename, index=False, float_format='%.6f')
