@@ -257,6 +257,64 @@ class EvaluationMetrics:
             'combined_zscore_std': zscore_metrics['combined_zscore_std']
         }
     
+    def compute_cross_method_zscore(self, method_results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        """
+        Compute z-scores across methods for meaningful comparison.
+        This calculates z-scores relative to all other methods, not within each method's samples.
+        
+        Args:
+            method_results: Dict with method names as keys and their evaluation results as values
+            
+        Returns:
+            Dict with method names as keys and their z-score metrics as values
+        """
+        # Extract mean scores for each method and metric
+        metric_names = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+        method_names = list(method_results.keys())
+        
+        # Collect mean scores for each metric across all methods
+        metric_means = {}
+        for metric in metric_names:
+            method_scores = []
+            for method_name in method_names:
+                avg_scores = method_results[method_name]['average_scores']
+                score = avg_scores.get(f'{metric}_mean', 0.0)
+                method_scores.append(score)
+            metric_means[metric] = method_scores
+        
+        # Calculate z-scores across methods for each metric
+        method_zscores = {method_name: {} for method_name in method_names}
+        
+        for metric in metric_names:
+            scores = np.array(metric_means[metric])
+            mean = np.mean(scores)
+            std = np.std(scores, ddof=1)
+            
+            if std == 0:
+                # All methods have identical scores for this metric
+                z_scores = np.zeros_like(scores)
+            else:
+                z_scores = (scores - mean) / std
+            
+            # Assign z-scores back to methods
+            for i, method_name in enumerate(method_names):
+                method_zscores[method_name][f'{metric}_zscore'] = z_scores[i]
+        
+        # Calculate combined z-score for each method
+        for method_name in method_names:
+            available_zscores = []
+            for metric in metric_names:
+                zscore_key = f'{metric}_zscore'
+                if zscore_key in method_zscores[method_name]:
+                    available_zscores.append(method_zscores[method_name][zscore_key])
+            
+            if available_zscores:
+                method_zscores[method_name]['combined_zscore'] = np.mean(available_zscores)
+            else:
+                method_zscores[method_name]['combined_zscore'] = 0.0
+        
+        return method_zscores
+
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         comparison = {}
         
@@ -417,7 +475,8 @@ class EvaluationMetrics:
                                          method_results: Dict[str, Dict[str, Any]], 
                                          dataset_name: str,
                                          n_bootstrap: int = 5000,
-                                         confidence_level: float = 0.95) -> Dict[str, Any]:
+                                         confidence_level: float = 0.95,
+                                         cross_method_zscores: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Any]:
         """
         Perform comprehensive statistical analysis for ALL metrics with confidence intervals.
         
@@ -467,8 +526,19 @@ class EvaluationMetrics:
             for method_name, results in method_results.items():
                 individual_scores = results['individual_scores']
 
-                if metric_key.startswith('combined_zscore'):
-                    # For Z-score metrics, we need to compute them from the evaluation results
+                if metric_key == 'combined_zscore':
+                    # Use cross-method z-scores if provided
+                    if cross_method_zscores and method_name in cross_method_zscores:
+                        # Create a single-value list for statistical analysis
+                        combined_score = cross_method_zscores[method_name]['combined_zscore']
+                        method_scores[method_name] = [combined_score]
+                    else:
+                        # Fallback to old method if cross-method z-scores not available
+                        eval_results = {'individual_scores': individual_scores}
+                        zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
+                        method_scores[method_name] = [zscore_metrics['combined_zscore']]
+                elif metric_key.startswith('combined_zscore'):
+                    # For other Z-score metrics, we need to compute them from the evaluation results
                     eval_results = {'individual_scores': individual_scores}
                     zscore_metrics = self.compute_zscore_combined_metrics(eval_results)
                     
@@ -491,8 +561,17 @@ class EvaluationMetrics:
         for metric_key, metric_name in metrics.items():
             method_scores = all_method_scores[metric_key]
             
+            # Skip metrics with no valid scores
+            if not method_scores or all(len(scores) == 0 for scores in method_scores.values()):
+                print(f"⚠️  Skipping {metric_name} - no valid scores available")
+                continue
+            
             # Find best performing method for this metric
-            method_means = {method: np.mean(scores) for method, scores in method_scores.items()}
+            method_means = {method: np.mean(scores) for method, scores in method_scores.items() if len(scores) > 0}
+            
+            if not method_means:
+                print(f"⚠️  Skipping {metric_name} - no methods with valid scores")
+                continue
             
             # For time and cost, lower is better; for quality metrics, higher is better
             if metric_key in ['processing_time', 'cost']:
@@ -639,6 +718,52 @@ class EvaluationMetrics:
         report.append("• Statistical significance determined by CI overlap and p-values")
         report.append("• Analysis performed separately for each metric")
         report.append("=" * 100)
+        
+        # Add special section for Combined Z-Score analysis
+        if 'combined_zscore' in comprehensive_results['metrics_analysis']:
+            combined_analysis = comprehensive_results['metrics_analysis']['combined_zscore']
+            report.append("\n" + "=" * 80)
+            report.append("COMBINED Z-SCORE DETAILED ANALYSIS")
+            report.append("=" * 80)
+            
+            # Show z-score interpretation
+            report.append("\n📊 Z-Score Interpretation:")
+            report.append("   > +1.0: Significantly above average performance")
+            report.append("   +0.5 to +1.0: Above average performance") 
+            report.append("   -0.5 to +0.5: Average performance")
+            report.append("   -1.0 to -0.5: Below average performance")
+            report.append("   < -1.0: Significantly below average performance")
+            
+            report.append(f"\n🏆 Method Rankings by Combined Z-Score:")
+            bootstrap_results = combined_analysis['bootstrap_results']
+            
+            # Sort methods by z-score
+            method_zscores = [(method, data['mean']) for method, data in bootstrap_results.items()]
+            method_zscores.sort(key=lambda x: x[1], reverse=True)
+            
+            for rank, (method, zscore) in enumerate(method_zscores, 1):
+                if zscore > 1.0:
+                    interpretation = "Significantly above average"
+                elif zscore > 0.5:
+                    interpretation = "Above average"
+                elif zscore > -0.5:
+                    interpretation = "Average"
+                elif zscore > -1.0:
+                    interpretation = "Below average" 
+                else:
+                    interpretation = "Significantly below average"
+                    
+                confidence_info = bootstrap_results[method]
+                report.append(f"   {rank}. {method:15}: {zscore:6.3f} [{confidence_info['ci_lower']:6.3f}, {confidence_info['ci_upper']:6.3f}] - {interpretation}")
+            
+            report.append("\n🔬 Statistical Significance:")
+            for method, test_info in combined_analysis['statistical_tests'].items():
+                if test_info['is_best']:
+                    report.append(f"   ✅ {method} is the best performing method")
+                elif test_info['significantly_different']:
+                    report.append(f"   📈 {method} is significantly different from best (p={test_info['p_value']:.4f})")
+                else:
+                    report.append(f"   📊 {method} is not significantly different from best (p={test_info['p_value']:.4f})")
         
         return "\n".join(report)
     

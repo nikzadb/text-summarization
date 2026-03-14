@@ -287,7 +287,7 @@ class BenchmarkFramework:
         print(df.to_string(index=False, float_format='{:.4f}'.format))
         
         print("\n=== TOP PERFORMERS BY METRIC ===")
-        for metric in ['Combined Score', 'ROUGE-1 F1', 'BERT F1', 'Avg Time (s)', 'Avg Cost ($)']:
+        for metric in ['Combined Zscore', 'ROUGE-1 F1', 'BERT F1', 'Avg Time (s)', 'Avg Cost ($)']:
             if metric in ['Avg Time (s)', 'Avg Cost ($)']:
                 best = df.loc[df[metric].idxmin()]
                 print(f"Best {metric}: {best['Method']} ({best[metric]:.6f})")
@@ -332,10 +332,13 @@ class BenchmarkFramework:
                             'rougeL_f1': detailed_df['rougeL_f1'].tolist(),
                             'bert_f1': detailed_df['bert_f1'].tolist(),
                             'bleurt_score': detailed_df['bleurt_score'].tolist(),
-                            'combined_zscore': detailed_df['combined_zscore'].tolist(),
                             'processing_time': detailed_df['processing_time'].tolist(),
                             'cost': detailed_df['cost'].tolist()
                         }
+                        
+                        # Add combined_zscore if it exists in the CSV, otherwise skip
+                        if 'combined_zscore' in detailed_df.columns:
+                            individual_scores['combined_zscore'] = detailed_df['combined_zscore'].tolist()
                         
                         # Calculate average scores for compatibility
                         average_scores = {}
@@ -363,9 +366,20 @@ class BenchmarkFramework:
                 print("=" * 50)
                 
                 try:
+                    # Calculate cross-method z-scores for meaningful comparison
+                    print("\n📊 Computing cross-method z-scores...")
+                    cross_method_zscores = self.evaluator.compute_cross_method_zscore(method_results)
+                    
+                    # Update the results with the corrected combined z-scores
+                    for result in self.results:
+                        if result.dataset == dataset_name and result.method in cross_method_zscores:
+                            new_combined_zscore = cross_method_zscores[result.method]['combined_zscore']
+                            result.combined_zscore = new_combined_zscore
+                            print(f"✅ Updated {result.method}: combined_zscore = {new_combined_zscore:.4f}")
+                    
                     # Perform comprehensive statistical analysis for ALL metrics
                     comprehensive_results = self.evaluator.comprehensive_statistical_analysis(
-                        method_results, dataset_name
+                        method_results, dataset_name, cross_method_zscores=cross_method_zscores
                     )
                     
                     # Generate and display comprehensive report
@@ -490,8 +504,13 @@ class BenchmarkFramework:
             # Create DataFrame and save to CSV
             enhanced_df = pd.DataFrame(enhanced_data)
             
-            # Sort by combined score (descending) for readability
-            enhanced_df = enhanced_df.sort_values('Combined Score', ascending=False)
+            # Sort by combined score (descending) for readability if column exists
+            if 'Combined Zscore' in enhanced_df.columns:
+                enhanced_df = enhanced_df.sort_values('Combined Zscore', ascending=False)
+            elif 'ROUGE-1 F1' in enhanced_df.columns:
+                enhanced_df = enhanced_df.sort_values('ROUGE-1 F1', ascending=False)
+            else:
+                print("⚠️  No suitable column for sorting found")
             
             # Save to CSV with proper formatting
             enhanced_df.to_csv(filename, index=False, float_format='%.6f')
