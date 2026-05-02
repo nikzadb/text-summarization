@@ -76,7 +76,10 @@ class GeminiSummarizer(BaseSummarizer):
         try:
             response = self.model.generate_content(
                 prompt,
-                generation_config={"max_output_tokens": self.max_output_tokens},
+                generation_config={
+                    "max_output_tokens": self.max_output_tokens,
+                    "use_reasoning": False
+                },
             )
             return response.text.strip()
         except Exception as e:

@@ -121,14 +121,8 @@ class GPT5MiniSummarizer(BaseSummarizer):
                     },
                     "verbosity": "low"
                 },
-                reasoning={
-                    "effort": "low"
-                },
                 tools=[],
-                store=True,
-                include=[
-                    "reasoning.encrypted_content"
-                ]
+                store=True
             )
             
             return response.text.content.strip()
@@ -160,14 +154,8 @@ class GPT5MiniSummarizer(BaseSummarizer):
                     },
                     "verbosity": "low"
                 },
-                reasoning={
-                    "effort": "low"
-                },
                 tools=[],
-                store=True,
-                include=[
-                    "reasoning.encrypted_content"
-                ]
+                store=True
             )
             
             summary = response.text.content.strip()
