@@ -5,7 +5,26 @@ import hashlib
 import os
 import random
 
-WIKIHOW_CSV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'wikihowAll.csv')
+import pandas as pd
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WIKIHOW_CSV = os.path.join(REPO_ROOT, 'data', 'wikihowAll.csv')
+MANIFEST_DIR = os.path.join(REPO_ROOT, 'manifests')
+# Frozen evaluation sets written by scripts/export_eval_data.py
+EVAL_DATA_DIR = os.path.join(REPO_ROOT, 'eval_data')
+
+
+def reference_hash(text: str) -> str:
+    return hashlib.sha256((text or '').strip().encode('utf-8')).hexdigest()
+
+
+def eval_data_path(dataset_type: str, eval_data_dir: str = EVAL_DATA_DIR) -> Optional[str]:
+    """The frozen evaluation set for a dataset (.csv or zipped .csv.zip), if present."""
+    for ext in ('.csv', '.csv.zip'):
+        path = os.path.join(eval_data_dir, dataset_type + ext)
+        if os.path.exists(path):
+            return path
+    return None
 
 
 class DatasetLoader:
@@ -258,8 +277,7 @@ class DatasetLoader:
         # max_samples=0 disables sampling, i.e. loads the whole source split
         by_hash = {}
         for item in self.load_dataset(dataset_type, split=split, max_samples=0):
-            h = hashlib.sha256((item['reference_summary'] or '').strip().encode('utf-8')).hexdigest()
-            by_hash.setdefault(h, item)
+            by_hash.setdefault(reference_hash(item['reference_summary']), item)
 
         data = [by_hash[h] for h in wanted if h in by_hash]
         missing = len(wanted) - len(data)
@@ -271,6 +289,52 @@ class DatasetLoader:
         print(f"Loaded {len(data)} documents for {dataset_type} from manifest {manifest_path}")
         self.loaded_data = data
         return data
+
+    def load_evaluation_set(self, dataset_type: str, max_samples: int = 0,
+                            manifest_dir: Optional[str] = MANIFEST_DIR,
+                            eval_data_dir: str = EVAL_DATA_DIR) -> List[Dict[str, str]]:
+        """The documents every experiment runs on, from the first source available:
+
+        1. eval_data/<dataset>.csv(.zip): the frozen evaluation set, checked
+           against the manifest (no download, no dependency on dataset versions);
+        2. manifests/<dataset>_manifest.csv: the same documents, located in the
+           source dataset through the loaders above;
+        3. seeded sampling, for datasets without a manifest (not the original set).
+
+        max_samples > 0 takes the first N documents.
+        """
+        manifest_path = os.path.join(manifest_dir, f'{dataset_type}_manifest.csv') if manifest_dir else None
+        has_manifest = bool(manifest_path and os.path.exists(manifest_path))
+
+        frozen = eval_data_path(dataset_type, eval_data_dir)
+        if frozen:
+            # keep_default_na: empty strings must stay strings, not become NaN
+            df = pd.read_csv(frozen, keep_default_na=False)
+            hashes = [reference_hash(r) for r in df['reference_summary']]
+            if 'reference_summary_sha256' in df and hashes != list(df['reference_summary_sha256']):
+                raise ValueError(f"{frozen} is corrupted: reference summaries don't match their hashes")
+            if has_manifest:
+                with open(manifest_path, newline='') as f:
+                    wanted = [row['reference_summary_sha256'] for row in csv.DictReader(f)]
+                if hashes != wanted:
+                    raise ValueError(f"{frozen} doesn't match {manifest_path}; re-export it with "
+                                     f"scripts/export_eval_data.py")
+            if max_samples:
+                df = df.head(max_samples)
+            data = [{'id': r.sample_id, 'article': r.text, 'reference_summary': r.reference_summary}
+                    for r in df.itertuples(index=False)]
+            print(f"Loaded {len(data)} documents for {dataset_type} from {frozen}")
+            self.loaded_data = data
+            return data
+
+        if has_manifest:
+            print(f"No frozen evaluation set for {dataset_type} in {eval_data_dir}; "
+                  f"loading the manifest documents from the source dataset")
+            return self.load_fixed_manifest(dataset_type, manifest_path, max_samples=max_samples)
+
+        print(f"⚠ No manifest for {dataset_type}; using seeded sampling (seed={self.seed}). These "
+              f"documents are reproducible across runs but are NOT the original evaluation set.")
+        return self.load_dataset(dataset_type, max_samples=max_samples)
 
     def get_sample_data(self, n_samples: int = 10) -> List[Dict[str, str]]:
         if not self.loaded_data:
