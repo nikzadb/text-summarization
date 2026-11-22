@@ -1,21 +1,32 @@
 from datasets import load_dataset
 from typing import List, Dict, Tuple, Optional
+import csv
+import hashlib
+import os
 import random
+
+WIKIHOW_CSV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'wikihowAll.csv')
 
 
 class DatasetLoader:
-    def __init__(self, dataset_name: str, subset: Optional[str] = None):
+    def __init__(self, dataset_name: str, subset: Optional[str] = None, seed: int = 42):
         self.dataset_name = dataset_name
         self.subset = subset
+        self.seed = seed
         self.dataset = None
         self.loaded_data = []
     
+    def _sample_indices(self, n: int, k: int) -> List[int]:
+        # A fresh generator per call, so a dataset's sample doesn't depend on
+        # which datasets were loaded before it by the same loader
+        return random.Random(self.seed).sample(range(n), k)
+
     def load_cnn_dailymail(self, split: str = 'test', max_samples: int = 100) -> List[Dict[str, str]]:
         print(f"Loading CNN/DailyMail dataset ({split} split)...")
         dataset = load_dataset('cnn_dailymail', '3.0.0', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -39,7 +50,7 @@ class DatasetLoader:
             dataset = load_dataset('ccdv/arxiv-summarization', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -62,11 +73,11 @@ class DatasetLoader:
         # Try the cleaned version first
         # dataset = load_dataset('gursi26/wikihow-cleaned', split=split)
         import pandas as pd
-        dataset = pd.read_csv('data/wikihowAll.csv')
+        dataset = pd.read_csv(WIKIHOW_CSV)
         dataset = dataset.dropna(subset=['headline', 'text'])
         
         if max_samples and max_samples < len(dataset):
-            dataset = dataset.sample(max_samples)
+            dataset = dataset.sample(max_samples, random_state=self.seed)
 
         dataset = dataset.to_dict(orient='records')
 
@@ -89,7 +100,7 @@ class DatasetLoader:
         dataset = load_dataset('ccdv/govreport-summarization', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -115,7 +126,7 @@ class DatasetLoader:
                 dataset = load_dataset('nyamuda/samsum', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -141,7 +152,7 @@ class DatasetLoader:
                 dataset = load_dataset('pszemraj/qmsum-cleaned', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -169,7 +180,7 @@ class DatasetLoader:
             dataset = load_dataset('nbroad/mediasum', split=split)
         
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
 
         data = []
@@ -193,7 +204,7 @@ class DatasetLoader:
         dataset = load_dataset('Aiera/aiera-ect-sum', split=split)
 
         if max_samples and max_samples < len(dataset):
-            indices = random.sample(range(len(dataset)), max_samples)
+            indices = self._sample_indices(len(dataset), max_samples)
             dataset = dataset.select(indices)
         
         data = []
@@ -232,11 +243,40 @@ class DatasetLoader:
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
     
+    def load_fixed_manifest(self, dataset_type: str, manifest_path: str, split: str = 'test',
+                            max_samples: int = 0) -> List[Dict[str, str]]:
+        """Load exactly the documents listed in a manifest (see
+        scripts/export_document_manifest.py), in manifest order, so new
+        architectures are scored on the same documents as the original runs.
+        max_samples > 0 takes the first N manifest documents, so smaller runs
+        are always a prefix of the full evaluation set."""
+        with open(manifest_path, newline='') as f:
+            wanted = [row['reference_summary_sha256'] for row in csv.DictReader(f)]
+        if max_samples and max_samples < len(wanted):
+            wanted = wanted[:max_samples]
+
+        # max_samples=0 disables sampling, i.e. loads the whole source split
+        by_hash = {}
+        for item in self.load_dataset(dataset_type, split=split, max_samples=0):
+            h = hashlib.sha256((item['reference_summary'] or '').strip().encode('utf-8')).hexdigest()
+            by_hash.setdefault(h, item)
+
+        data = [by_hash[h] for h in wanted if h in by_hash]
+        missing = len(wanted) - len(data)
+        if missing:
+            raise ValueError(
+                f"{missing}/{len(wanted)} manifest documents not found in {dataset_type} "
+                f"({split} split); the source data differs from the original run's."
+            )
+        print(f"Loaded {len(data)} documents for {dataset_type} from manifest {manifest_path}")
+        self.loaded_data = data
+        return data
+
     def get_sample_data(self, n_samples: int = 10) -> List[Dict[str, str]]:
         if not self.loaded_data:
             raise ValueError("No data loaded. Call load_dataset() first.")
         
-        return random.sample(self.loaded_data, min(n_samples, len(self.loaded_data)))
+        return random.Random(self.seed).sample(self.loaded_data, min(n_samples, len(self.loaded_data)))
     
     def get_data_statistics(self) -> Dict[str, float]:
         if not self.loaded_data:
