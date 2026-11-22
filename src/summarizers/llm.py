@@ -1,14 +1,25 @@
 import time
 import torch
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from .traditional import BaseSummarizer
 
 
 class BARTSummarizer(BaseSummarizer):
-    def __init__(self, model_name: str = "facebook/bart-large-cnn"):
+    # Extra generation kwargs passed to the pipeline. Empty for BART/DistilBART,
+    # which run their checkpoint's own generation_config (num_beams=4) as in the
+    # original experiments; subclasses pin settings that differ by checkpoint.
+    generate_kwargs: Dict[str, Any] = {}
+
+    def __init__(self, model_name: str = "facebook/bart-large-cnn",
+                 revision: Optional[str] = None,
+                 max_input_tokens: Optional[int] = None,
+                 torch_dtype: Optional[torch.dtype] = None):
         super().__init__(f"OpenSource-{model_name.split('/')[-1]}")
         self.model_name = model_name
+        self.revision = revision
+        self.max_input_tokens = max_input_tokens
+        self.torch_dtype = torch_dtype
         self.tokenizer = None
         self.model = None
         self.pipeline = None
@@ -25,8 +36,14 @@ class BARTSummarizer(BaseSummarizer):
                 device = "cpu"
             print(f"Using device: {device}")
             
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, revision=self.revision)
+            if self.max_input_tokens:
+                # The pipeline's truncation=True truncates to model_max_length
+                self.tokenizer.model_max_length = self.max_input_tokens
+            model_kwargs = {'revision': self.revision}
+            if self.torch_dtype is not None:
+                model_kwargs['torch_dtype'] = self.torch_dtype
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, **model_kwargs)
             self.model = self.model.to(device)
             
             self.pipeline = pipeline(
@@ -40,6 +57,9 @@ class BARTSummarizer(BaseSummarizer):
             print(f"Error loading model {self.model_name}: {e}")
             raise
     
+    def _postprocess(self, summary: str) -> str:
+        return summary
+
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         if not self.pipeline:
             raise RuntimeError("Model not loaded")
@@ -53,16 +73,31 @@ class BARTSummarizer(BaseSummarizer):
                 max_length=max_length,
                 min_length=min_length,
                 do_sample=False,
-                truncation=True
+                truncation=True,
+                **self.generate_kwargs
             )
-            return result[0]['summary_text']
+            return self._postprocess(result[0]['summary_text'])
         except Exception as e:
+            print(f"Warning: {self.name} generation failed, falling back to lead sentences: {e}")
             sentences = text.split('.')[:max_sentences]
             return '. '.join(sentences) + '.'
+
+    def summarize_batch(self, texts: List[str], max_sentences: int = 3, batch_size: int = 1) -> List[str]:
+        """Batched generation through the pipeline (used for throughput benchmarks)."""
+        results = self.pipeline(
+            texts,
+            max_length=max_sentences * 30,
+            min_length=max_sentences * 10,
+            do_sample=False,
+            truncation=True,
+            batch_size=batch_size,
+            **self.generate_kwargs
+        )
+        return [self._postprocess(r['summary_text']) for r in results]
     
     def get_cost(self) -> float:
         """Return AWS GPU instance cost per hour for transformer models"""
-        return 0.95  # $0.95/hour for GPU instance
+        return 0.958  # AWS Sydney ml.g4dn.xlarge on-demand, $/hour (manuscript Table 1)
     
     def cleanup(self):
         """Clean up model resources and free GPU/CPU memory"""
@@ -94,5 +129,5 @@ class BARTSummarizer(BaseSummarizer):
 
 
 class DistilBARTSummarizer(BARTSummarizer):
-    def __init__(self):
-        super().__init__("sshleifer/distilbart-cnn-12-6")
+    def __init__(self, **kwargs):
+        super().__init__("sshleifer/distilbart-cnn-12-6", **kwargs)

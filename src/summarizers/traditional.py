@@ -49,7 +49,7 @@ class BaseSummarizer(ABC):
     
     def get_cost(self) -> float:
         """Return AWS CPU instance cost per hour for traditional methods"""
-        return 0.35  # $0.35/hour for CPU instance
+        return 0.238  # AWS Sydney ml.c5.xlarge on-demand, $/hour (manuscript Table 1)
     
     def cleanup(self):
         """Clean up model resources (GPU/CPU memory, etc.)"""
