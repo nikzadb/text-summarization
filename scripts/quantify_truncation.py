@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from transformers import AutoTokenizer
-from src.dataset_loader import DatasetLoader
+from src.dataset_loader import DatasetLoader, MANIFEST_DIR
 from src.summarizers.long_context import PegasusSummarizer, LongT5Summarizer
 
 MODEL_TOKEN_LIMIT = 1024
@@ -30,9 +30,9 @@ CHECKPOINTS = {
 }
 
 
-def quantify(dataset_name: str, manifest_path: str, tokenizer, token_limit: int = MODEL_TOKEN_LIMIT):
+def quantify(dataset_name: str, manifest_dir: str, tokenizer, token_limit: int = MODEL_TOKEN_LIMIT):
     loader = DatasetLoader(dataset_name)
-    samples = loader.load_fixed_manifest(dataset_name, manifest_path)
+    samples = loader.load_evaluation_set(dataset_name, manifest_dir=manifest_dir)
 
     retained_pct = []
     truncated_flags = []
@@ -59,7 +59,7 @@ def quantify(dataset_name: str, manifest_path: str, tokenizer, token_limit: int 
 
 def main():
     parser = argparse.ArgumentParser(description='Quantify local-transformer truncation impact per dataset.')
-    parser.add_argument('--manifest-dir', default='manifests')
+    parser.add_argument('--manifest-dir', default=MANIFEST_DIR)
     parser.add_argument('--datasets', nargs='+', default=['cnn_dailymail', 'arxiv', 'wikihow', 'mediasum'])
     parser.add_argument('--out', default='truncation_report.csv')
     args = parser.parse_args()
@@ -75,7 +75,7 @@ def main():
             continue
         for model_name, (tok, limit) in tokenizers.items():
             print(f"Quantifying truncation: {dataset_name} / {model_name} (limit {limit}) ...")
-            stats = quantify(dataset_name, manifest_path, tok, token_limit=limit)
+            stats = quantify(dataset_name, args.manifest_dir, tok, token_limit=limit)
             stats.update({'dataset': dataset_name, 'model': model_name, 'token_limit': limit})
             rows.append(stats)
             print(f"  mean_pct_retained={stats['mean_pct_retained']:.1f}%  "

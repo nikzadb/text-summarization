@@ -141,7 +141,9 @@ class GPT54MiniSummarizer(BaseSummarizer):
             )
             return response.output_text.strip()
         
-        summary, latency = timed_call_with_retry(call, self.rate_limiter, RETRYABLE_ERRORS)
+        summary, latency = timed_call_with_retry(
+            call, self.rate_limiter, lambda e: isinstance(e, RETRYABLE_ERRORS)
+        )
         return prompt, summary, latency
     
     def summarize(self, text: str, max_sentences: int = 3) -> str:

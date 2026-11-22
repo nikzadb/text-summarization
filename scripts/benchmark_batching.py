@@ -13,7 +13,6 @@ this CPU-only development machine.
 Usage:
     python scripts/benchmark_batching.py \
         --dataset cnn_dailymail --method bart \
-        --manifest manifests/cnn_dailymail_manifest.csv \
         --batch-sizes 1 4 8 16 --dtype fp32 \
         --out batching_results_cnn_dailymail_bart.csv
 """
@@ -26,7 +25,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
-from src.dataset_loader import DatasetLoader
+from src.dataset_loader import DatasetLoader, MANIFEST_DIR
 from src.summarizers.llm import BARTSummarizer, DistilBARTSummarizer
 from src.summarizers.long_context import PegasusSummarizer, LongT5Summarizer
 
@@ -85,7 +84,8 @@ def main():
     parser = argparse.ArgumentParser(description='Batched local-inference throughput benchmark.')
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--method', required=True, choices=['bart', 'distilbart', 'pegasus', 'longt5'])
-    parser.add_argument('--manifest', required=True)
+    parser.add_argument('--manifest', default=None,
+                        help='Manifest CSV (default: manifests/<dataset>_manifest.csv)')
     parser.add_argument('--batch-sizes', nargs='+', type=int, default=[1, 4, 8, 16])
     parser.add_argument('--max-sentences', type=int, default=None,
                         help="Defaults to the dataset's standard value (as in main.py)")
@@ -102,7 +102,8 @@ def main():
         args.max_sentences = DEFAULT_MAX_SENTENCES[args.dataset]
 
     loader = DatasetLoader(args.dataset)
-    samples = loader.load_fixed_manifest(args.dataset, args.manifest)
+    manifest_dir = os.path.dirname(os.path.abspath(args.manifest)) if args.manifest else MANIFEST_DIR
+    samples = loader.load_evaluation_set(args.dataset, manifest_dir=manifest_dir)
     if args.max_docs and len(samples) > args.max_docs:
         samples = samples[:args.max_docs]
     texts = [s['article'] for s in samples]

@@ -1,19 +1,33 @@
 import os
 from typing import Dict, Any, Optional, Tuple
-import google.generativeai as genai
-from google.api_core import exceptions as google_exceptions
+import httpx
+from google import genai
+from google.genai import errors, types
 
 from .api_utils import RateLimiter, timed_call_with_retry
 from .traditional import BaseSummarizer, TextRankSummarizer, TFIDFRankSummarizer
 
-# Transient failures worth retrying: rate limits (429), overload (503), timeouts (504), 500
-RETRYABLE_ERRORS = (
-    google_exceptions.TooManyRequests,
-    google_exceptions.ResourceExhausted,
-    google_exceptions.ServiceUnavailable,
-    google_exceptions.DeadlineExceeded,
-    google_exceptions.InternalServerError,
-)
+# Requests that get no response within this time are abandoned and retried
+REQUEST_TIMEOUT_MS = 120_000
+
+
+def _is_retryable(e: BaseException) -> bool:
+    """Transient failures: rate limits (429), 5xx (overload, deadline), timeouts, dropped connections."""
+    if isinstance(e, errors.ServerError):
+        return True
+    if isinstance(e, errors.ClientError):
+        return e.code == 429
+    return isinstance(e, httpx.TransportError)
+
+
+def _minimal_thinking(model_name: str) -> types.ThinkingConfig:
+    """
+    Lowest thinking setting each model family accepts. Gemini 2.5 can turn thinking off
+    (budget 0); Gemini 3.x models reject budget 0 / MINIMAL and accept LOW at the lowest.
+    """
+    if model_name.startswith("gemini-2.5"):
+        return types.ThinkingConfig(thinking_budget=0)
+    return types.ThinkingConfig(thinking_level="low")
 
 
 def _approx_tokens_from_words(word_count: int, multiplier: float = 1.3) -> float:
@@ -28,7 +42,7 @@ class GeminiSummarizer(BaseSummarizer):
         self,
         api_key: Optional[str] = None,
         model_name: str = "gemini-3.8-flash",
-        max_output_tokens: int = 200,
+        max_output_tokens: int = 500,
         token_multiplier: float = 1.3,
         # Pricing per 1K tokens (USD). TODO: verify against Gemini 3.8 Flash pricing;
         # values below are carried over from Gemini 2.5 Flash public pricing:
@@ -41,7 +55,7 @@ class GeminiSummarizer(BaseSummarizer):
         super().__init__(f"Gemini-{model_name}")
         self.model_name = model_name
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.model = None
+        self.client = None
         self.max_output_tokens = max_output_tokens
 
         self.token_multiplier = token_multiplier
@@ -49,15 +63,21 @@ class GeminiSummarizer(BaseSummarizer):
         self.output_price_per_1k = output_price_per_1k
         self.rate_limiter = RateLimiter(max_calls_per_second)
 
-        self._setup_model()
+        self._setup_client()
 
-    def _setup_model(self):
+    def _setup_client(self):
         if not self.api_key:
             raise ValueError(
                 "Gemini API key not provided. Set GEMINI_API_KEY environment variable or pass api_key parameter."
             )
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(self.model_name)
+        self.client = genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+        )
+        self.config = types.GenerateContentConfig(
+            max_output_tokens=self.max_output_tokens,
+            thinking_config=_minimal_thinking(self.model_name),
+        )
 
     def _estimate_tokens(self, text: str) -> float:
         return _approx_tokens_from_words(len(text.split()), self.token_multiplier)
@@ -75,8 +95,8 @@ class GeminiSummarizer(BaseSummarizer):
         excluding rate-limit waits and failed/retried attempts. Raises if the request
         ultimately fails, rather than substituting a fallback summary.
         """
-        if not self.model:
-            raise RuntimeError("Gemini model not initialized")
+        if not self.client:
+            raise RuntimeError("Gemini client not initialized")
 
         prompt = (
             f"""Summarize the text below in exactly {max_sentences} sentences\n
@@ -94,13 +114,19 @@ class GeminiSummarizer(BaseSummarizer):
         )
 
         def call() -> str:
-            response = self.model.generate_content(
-                prompt,
-                generation_config={"max_output_tokens": self.max_output_tokens},
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=prompt, config=self.config
             )
+            finish_reason = response.candidates[0].finish_reason if response.candidates else None
+            # A cut-off or empty reply is not a summary; fail rather than record it
+            if finish_reason != types.FinishReason.STOP or not response.text:
+                raise RuntimeError(
+                    f"Gemini returned no complete summary (finish_reason={finish_reason}, "
+                    f"max_output_tokens={self.max_output_tokens})"
+                )
             return response.text.strip()
 
-        return timed_call_with_retry(call, self.rate_limiter, RETRYABLE_ERRORS)
+        return timed_call_with_retry(call, self.rate_limiter, _is_retryable)
 
     def summarize(self, text: str, max_sentences: int = 3) -> str:
         return self._generate(text, max_sentences)[0]
@@ -129,11 +155,11 @@ class GeminiSummarizer(BaseSummarizer):
         }
     
     def cleanup(self):
-        """Clean up Gemini model resources"""
+        """Clean up Gemini client resources"""
         try:
-            if hasattr(self, 'model') and self.model is not None:
-                del self.model
-                self.model = None
-            print(f"✓ Cleaned up {self.name} model resources")
+            if hasattr(self, 'client') and self.client is not None:
+                self.client.close()
+                self.client = None
+            print(f"✓ Cleaned up {self.name} client resources")
         except Exception as e:
             print(f"Warning: Error during cleanup of {self.name}: {e}")

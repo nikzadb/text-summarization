@@ -20,7 +20,7 @@ Instances for step 1, matching the manuscript's cost model (Table 1):
 
 Latency is measured on the hardware the method is priced at, and cost is derived from that latency (plus token pricing for the API models).
 
-For Gemini and GPT, latency runs from sending the request until the summary is received. Waits for the rate limit, failed attempts (rate limits, overload, timeouts) and the backoff between retries are not counted. API calls are capped at 2.5 per second per method (`max_calls_per_second` in `gemini.py` and `openai_gpt.py`).
+For Gemini and GPT, latency runs from sending the request until the summary is received. Waits for the rate limit, failed attempts (rate limits, overload, timeouts) and the backoff between retries are not counted. A Gemini request with no response after 120 s is abandoned and retried. API calls are capped at 2.5 per second per method (`max_calls_per_second` in `gemini.py` and `openai_gpt.py`).
 
 ## Order of work
 
@@ -34,11 +34,13 @@ Parts A and B run at the same time on separate machines. Part C starts once A1 a
 
 ## Same documents in every run
 
-Every run loads its documents from `manifests/<dataset>_manifest.csv`. These are the exact documents the original experiments used (CNN/DailyMail 998, the others 1,000), always in the same order. Both instances, all methods and all re-runs are scored on identical records; `evaluate.py` checks this and stops if two methods' documents differ.
+Every run reads its documents from `eval_data/<dataset>.csv` (`arxiv.csv.zip` for arXiv): the frozen evaluation sets, committed to the repo, with columns `sample_id`, `text`, `reference_summary`. These are the exact documents the original experiments used (CNN/DailyMail 998, the others 1,000), always in the same order. No dataset is downloaded on either instance. Both instances, all methods and all re-runs are scored on identical records; `evaluate.py` checks this and stops if two methods' documents differ.
+
+If a dataset has no file in `eval_data/`, runs fall back to locating the manifest documents in the source dataset, then to seeded sampling. Check the first lines of each run's log: they must say `Loaded ... from .../eval_data/...`.
 
 - This is the default; no flag is needed.
-- `--max-samples N` takes the **first N** manifest documents, so a test run is always a subset of the full set.
-- A run stops with an error if any manifest document can't be found in the source data.
+- `--max-samples N` takes the **first N** documents, so a test run is always a subset of the full set.
+- A run stops with an error if an `eval_data/` file has been altered (its reference summaries no longer match their stored hashes).
 - Only datasets without a manifest (e.g. GovReport) fall back to seeded sampling (`--seed`, default 42), with a printed warning.
 
 ## Settings
@@ -60,15 +62,22 @@ Models:
 | DistilBART | `sshleifer/distilbart-cnn-12-6` | latest | 1,024 |
 | PEGASUS | `google/pegasus-cnn_dailymail` | `40d588fdab0cc077b80d950b300bf66ad3c75b92` | 1,024 |
 | LongT5 | `pszemraj/long-t5-tglobal-base-16384-book-summary` | `a40cddfd840d398653f37d98c384bfe56d677125` | 4,096 |
-| Gemini-3.8 Flash | `gemini-3.8-flash` (API) | provider alias | full document |
+| Gemini-3.8 Flash | `gemini-3.8-flash` (API, `google-genai` SDK), thinking low | provider alias | full document |
 | GPT-5.4-mini | `gpt-5.4-mini` (API), reasoning off | provider alias | full document |
 
 All local transformers decode with 4 beams in fp32 (B3 adds fp16 as a separate measurement). Evaluation uses ROUGE-1/2/L, BERTScore (RoBERTa-large) and BLEURT (`Elron/bleurt-base-512`, the same checkpoint as the original results), with 10,000 bootstrap iterations.
 
-**Before Part A,** fix two open issues in `src/summarizers/gemini.py`:
+**Before Part A:** `src/summarizers/gemini.py` prices Gemini-3.8 Flash at $0.75 / $3.75 per M tokens, still marked TODO. Confirm these against Google's pricing page, otherwise every Gemini cost may be wrong.
 
-- **Prices:** it still carries Gemini 2.5 Flash prices ($0.30 / $2.50 per M tokens; see the TODO there). Set the Gemini-3.8 Flash prices first, otherwise every Gemini cost is wrong.
-- **Truncated summaries:** Gemini's thinking counts against `max_output_tokens=200` and uses up most of it, so summaries come back cut off (in testing, Gemini-3.8 Flash returned only `a single sentence summary:**`). Either turn thinking off (needs the newer `google-genai` SDK) or raise the limit. Until this is fixed, Gemini summaries are unusable.
+Thinking is kept to the minimum each API model allows, and both have a 500-token output limit:
+
+| Model | Thinking setting | Why |
+|---|---|---|
+| GPT-5.4-mini | `reasoning.effort = "none"` | Thinking fully off; 0 reasoning tokens |
+| Gemini-3.8 Flash | `thinking_level = "low"` | Gemini 3.x models reject `minimal` and `thinking_budget = 0`; `low` is the lowest they accept |
+| Gemini 2.5 Flash (if used) | `thinking_budget = 0` | Thinking fully off |
+
+So Gemini-3.8 Flash still does some thinking. Report this in the methods section. A Gemini reply that is cut off at the output limit or comes back empty is treated as an error, not recorded as a summary.
 
 ## Setup (both instances)
 
@@ -79,7 +88,6 @@ python3.10 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`data/wikihowAll.csv` isn't in git; copy it into `data/` on both instances.
 
 Check the hardware: on the GPU instance, `nvidia-smi` must show the T4. On the CPU instance, `nproc` must print 4 and `python -c "import torch; print(torch.cuda.is_available())"` must print `False`.
 
@@ -206,14 +214,14 @@ for ds in $DATASETS; do
     for dt in fp32 fp16; do
       [ "$m" = longt5 ] && [ "$dt" = fp16 ] && continue   # T5 models produce NaNs in fp16
       python scripts/benchmark_batching.py --dataset $ds --method $m --dtype $dt \
-        --manifest manifests/${ds}_manifest.csv --batch-sizes 1 4 8 16 \
+        --batch-sizes 1 4 8 16 \
         --out runs/gpu_batching/${ds}_${m}_${dt}.csv 2>&1 | tee -a runs/gpu_batching/batching.log
     done
   done
 done
 ```
 
-Each configuration uses the first 200 manifest documents. An out-of-memory error at a batch size is recorded as `oom=True` in the CSV (it is itself the result: that configuration doesn't fit on a T4) and the sweep continues.
+Each configuration uses the first 200 documents. An out-of-memory error at a batch size is recorded as `oom=True` in the CSV (it is itself the result: that configuration doesn't fit on a T4) and the sweep continues.
 
 ## B4. Truncation statistics
 

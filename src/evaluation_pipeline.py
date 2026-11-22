@@ -102,21 +102,21 @@ class EvaluationPipeline:
                 raise ValueError(f"{method} and {first} on {dataset_name} were not run on the same "
                                  f"documents in the same order; regenerate from the manifest.")
 
-        method_results = {}
+        per_doc, method_results = {}, {}
         for method, df in detailed.items():
-            individual = {k: df[k].tolist() for k in
-                          ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score',
-                           'processing_time', 'cost']}
+            per_doc[method] = {k: df[k].tolist() for k in
+                               ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score',
+                                'processing_time', 'cost']}
             method_results[method] = {
-                'individual_scores': individual,
-                'average_scores': {f'{k}_mean': float(np.mean(v)) for k, v in individual.items()},
-                'sample_count': len(df),
+                'average_scores': {f'{k}_mean': float(np.mean(v)) for k, v in per_doc[method].items()},
             }
 
+        # Per-metric Z-scores for the table; the composite and all CIs/tests come
+        # from the paired bootstrap, whose point estimate is the same composite
         zscores = self.evaluator.compute_cross_method_zscore(method_results)
-        analysis = self.evaluator.comprehensive_statistical_analysis(
-            method_results, dataset_name, n_bootstrap=self.n_bootstrap,
-            confidence_level=self.confidence_level, cross_method_zscores=zscores)
+        analysis = self.evaluator.paired_bootstrap_analysis(
+            per_doc, dataset_name, n_bootstrap=self.n_bootstrap,
+            confidence_level=self.confidence_level)
         print(self.evaluator.generate_comprehensive_report(analysis))
 
         dataset_dir = os.path.join(self.output_dir, dataset_name)
@@ -129,8 +129,8 @@ class EvaluationPipeline:
         return table
 
     def _results_table(self, analysis: Dict, zscores: Dict) -> pd.DataFrame:
-        """One row per method: metric means with bootstrap CIs, per-metric Z-scores,
-        and the significance test against the best method on the composite."""
+        """One row per method: metric means with paired-bootstrap CIs, per-metric
+        Z-scores, and the paired test against the best method on the composite."""
         rows = []
         metrics = analysis['metrics_analysis']
         for method in metrics['rouge1_f1']['bootstrap_results']:
@@ -146,9 +146,13 @@ class EvaluationPipeline:
             for key, z in zscores[method].items():
                 if key.endswith('_zscore') and key != 'combined_zscore':
                     row[f'{COLUMN_NAMES.get(key[:-7], key[:-7])} Z'] = z
-            test = metrics['combined_zscore']['statistical_tests'][method]
+            composite = metrics['combined_zscore']
+            test = composite['statistical_tests'][method]
+            row['Rank-1 Share'] = composite['rank1_share'][method]
             row['Is Best Method'] = test['is_best']
             row['P-value vs Best'] = test['p_value'] if test['p_value'] is not None else 'N/A'
+            row['Diff vs Best CI Lower'] = test.get('difference_ci_lower', 0.0)
+            row['Diff vs Best CI Upper'] = test.get('difference_ci_upper', 0.0)
             row['Effect Size'] = test['effect_size']
             row['Significantly Different'] = test['significantly_different']
             row['Statistical Interpretation'] = test['interpretation']

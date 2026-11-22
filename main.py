@@ -45,10 +45,10 @@ def main():
                             f'value {DEFAULT_MAX_SENTENCES}')
     parser.add_argument('--fixed-manifest-dir', type=str,
                        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manifests'),
-                       help='Directory of <dataset>_manifest.csv files. A dataset with a manifest '
-                            'is loaded from it (the same documents as the original runs; '
-                            '--max-samples takes the first N); one without falls back to seeded '
-                            'sampling')
+                       help='Directory of <dataset>_manifest.csv files. Documents come from the '
+                            'frozen eval_data/<dataset>.csv(.zip) if present (checked against the '
+                            'manifest), else from the source dataset via the manifest, else seeded '
+                            'sampling. --max-samples takes the first N')
     parser.add_argument('--seed', type=int, default=42,
                        help='Sampling seed for datasets without a manifest')
     parser.add_argument('--output-dir', type=str, default='runs',

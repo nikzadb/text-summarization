@@ -315,6 +315,138 @@ class EvaluationMetrics:
         
         return method_zscores
 
+    QUALITY_METRICS = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1', 'bert_f1', 'bleurt_score']
+    PERFORMANCE_METRICS = ['processing_time', 'cost']  # lower is better
+    METRIC_NAMES = {
+        'rouge1_f1': 'ROUGE-1 F1', 'rouge2_f1': 'ROUGE-2 F1', 'rougeL_f1': 'ROUGE-L F1',
+        'bert_f1': 'BERT F1', 'bleurt_score': 'BLEURT Score', 'combined_zscore': 'Combined Z-Score',
+        'processing_time': 'Processing Time (s)', 'cost': 'Cost ($)',
+    }
+
+    @staticmethod
+    def _composite_from_means(means: np.ndarray) -> np.ndarray:
+        """Composite quality from per-method metric means, as compute_cross_method_zscore:
+        Z-score each metric across methods (ddof=1), then average the Z-scores.
+        means: (..., n_methods, n_quality_metrics) -> (..., n_methods)"""
+        mu = means.mean(axis=-2, keepdims=True)
+        sd = means.std(axis=-2, ddof=1, keepdims=True)
+        z = np.divide(means - mu, sd, out=np.zeros_like(means), where=sd > 0)
+        return z.mean(axis=-1)
+
+    def paired_bootstrap_analysis(self,
+                                  per_doc: Dict[str, Dict[str, List[float]]],
+                                  dataset_name: str,
+                                  n_bootstrap: int = 10000,
+                                  confidence_level: float = 0.95,
+                                  seed: int = 42,
+                                  chunk_size: int = 500) -> Dict[str, Any]:
+        """Paired document-level bootstrap over all methods of a dataset.
+
+        Every resample draws one set of documents (with replacement) shared by all
+        methods, recomputes each method's metric means on it, and recomputes the
+        cross-method composite from those means. This gives:
+          - CIs for every metric and for the composite (whose value depends on all
+            methods jointly, so it can only be bootstrapped this way);
+          - paired tests against the best method: the CI of the per-resample
+            difference, with a two-sided bootstrap p-value;
+          - for the composite, the share of resamples in which each method ranks first.
+
+        per_doc: method -> metric -> per-document values, every method on the same
+        documents in the same order. Returns the same structure as
+        comprehensive_statistical_analysis.
+        """
+        methods = list(per_doc)
+        keys = self.QUALITY_METRICS + self.PERFORMANCE_METRICS
+        X = np.stack([np.stack([np.asarray(per_doc[m][k], dtype=float) for k in keys]) for m in methods])
+        n_docs = X.shape[2]
+        n_quality = len(self.QUALITY_METRICS)
+
+        # Resampling with replacement == multinomial document weights; chunked to bound memory
+        rng = np.random.default_rng(seed)
+        boot = np.empty((n_bootstrap, len(methods), len(keys)))
+        for start in range(0, n_bootstrap, chunk_size):
+            b = min(chunk_size, n_bootstrap - start)
+            weights = rng.multinomial(n_docs, np.full(n_docs, 1.0 / n_docs), size=b) / n_docs
+            boot[start:start + b] = np.einsum('bn,mkn->bmk', weights, X)
+
+        point = X.mean(axis=2)
+        distributions = {k: (point[:, j], boot[:, :, j]) for j, k in enumerate(keys)}
+        distributions['combined_zscore'] = (self._composite_from_means(point[:, :n_quality]),
+                                            self._composite_from_means(boot[:, :, :n_quality]))
+
+        alpha = 1 - confidence_level
+        lo_q, hi_q = 100 * alpha / 2, 100 * (1 - alpha / 2)
+        results = {
+            'dataset': dataset_name,
+            'confidence_level': confidence_level,
+            'n_bootstrap': n_bootstrap,
+            'method': 'paired document-level bootstrap',
+            'seed': seed,
+            'metrics_analysis': {},
+        }
+
+        for key, (point_values, dist) in distributions.items():
+            lower_is_better = key in self.PERFORMANCE_METRICS
+            best = int(np.argmin(point_values) if lower_is_better else np.argmax(point_values))
+            best_name = methods[best]
+
+            bootstrap_results, tests = {}, {}
+            for i, m in enumerate(methods):
+                bootstrap_results[m] = {
+                    'mean': float(point_values[i]),
+                    'ci_lower': float(np.percentile(dist[:, i], lo_q)),
+                    'ci_upper': float(np.percentile(dist[:, i], hi_q)),
+                    'std_error': float(np.std(dist[:, i])),
+                    'n_samples': n_docs,
+                    'confidence_level': confidence_level,
+                }
+                if i == best:
+                    tests[m] = {'is_best': True, 'p_value': None, 'effect_size': 0.0,
+                                'significantly_different': False,
+                                'interpretation': 'Best performing method'}
+                    continue
+
+                # Positive difference = the best method is better
+                sign = -1.0 if lower_is_better else 1.0
+                diff = sign * (dist[:, best] - dist[:, i])
+                diff_lo, diff_hi = np.percentile(diff, [lo_q, hi_q])
+                p_value = float(min(1.0, 2 * min(np.mean(diff <= 0), np.mean(diff >= 0))))
+                significant = bool(diff_lo > 0 or diff_hi < 0)
+                if key == 'combined_zscore':
+                    # Already in standard-deviation units across methods
+                    effect = float(sign * (point_values[best] - point_values[i]))
+                else:
+                    # Cohen's d_z on the paired per-document differences
+                    j = keys.index(key)
+                    d = sign * (X[best, j] - X[i, j])
+                    effect = float(d.mean() / d.std(ddof=1)) if d.std(ddof=1) > 0 else 0.0
+
+                if significant:
+                    direction = 'worse' if diff_lo > 0 else 'better'
+                    interpretation = f"Significantly {direction} than {best_name}"
+                    if lower_is_better:
+                        interpretation += f" ({'higher' if diff_lo > 0 else 'lower'} {key.replace('_', ' ')})"
+                else:
+                    interpretation = f"No significant difference from {best_name}"
+                tests[m] = {'is_best': False, 'p_value': p_value, 'effect_size': effect,
+                            'difference_ci_lower': float(diff_lo), 'difference_ci_upper': float(diff_hi),
+                            'significantly_different': significant, 'interpretation': interpretation}
+
+            entry = {
+                'metric_name': self.METRIC_NAMES[key],
+                'best_method': best_name,
+                'best_method_score': float(point_values[best]),
+                'method_scores': {m: float(v) for m, v in zip(methods, point_values)},
+                'bootstrap_results': bootstrap_results,
+                'statistical_tests': tests,
+            }
+            if key == 'combined_zscore':
+                winners = np.argmax(dist, axis=1)
+                entry['rank1_share'] = {m: float(np.mean(winners == i)) for i, m in enumerate(methods)}
+            results['metrics_analysis'][key] = entry
+
+        return results
+
     def compare_methods(self, results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         comparison = {}
         

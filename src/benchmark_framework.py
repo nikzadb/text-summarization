@@ -26,7 +26,7 @@ from .summarizers.long_context import PegasusSummarizer, LongT5Summarizer
 from .summarizers.chunked import ChunkedSummarizer
 from .summarizers.gemini import GeminiSummarizer
 from .summarizers.openai_gpt import GPT54MiniSummarizer
-from .dataset_loader import DatasetLoader
+from .dataset_loader import DatasetLoader, MANIFEST_DIR
 
 # Built on demand and cleaned up after each (dataset, method) run
 SUMMARIZERS = {
@@ -159,22 +159,15 @@ class BenchmarkFramework:
                                     methods: List[str],
                                     max_samples: int = 0,
                                     max_sentences: Union[int, Dict[str, int]] = 3,
-                                    manifest_dir: Optional[str] = 'manifests',
+                                    manifest_dir: Optional[str] = MANIFEST_DIR,
                                     seed: int = 42,
                                     skip_existing: bool = False) -> List[GenerationResult]:
         loader = DatasetLoader('benchmark', seed=seed)
 
         for dataset_name in datasets:
             print(f"\n=== Loading {dataset_name} dataset ===")
-            manifest_path = os.path.join(manifest_dir, f'{dataset_name}_manifest.csv') if manifest_dir else None
-            if manifest_path and os.path.exists(manifest_path):
-                dataset_samples = loader.load_fixed_manifest(dataset_name, manifest_path,
-                                                             max_samples=max_samples)
-            else:
-                print(f"⚠ No manifest for {dataset_name}; using seeded sampling (seed={seed}). "
-                      f"These documents are reproducible across runs but are NOT the "
-                      f"original evaluation set.")
-                dataset_samples = loader.load_dataset(dataset_name, max_samples=max_samples)
+            dataset_samples = loader.load_evaluation_set(dataset_name, max_samples=max_samples,
+                                                         manifest_dir=manifest_dir)
 
             n_sentences = max_sentences[dataset_name] if isinstance(max_sentences, dict) else max_sentences
             for method in methods:

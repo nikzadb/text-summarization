@@ -22,7 +22,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 from src.dataset_loader import DatasetLoader
 
-MANIFEST_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'manifests')
 # Extractive methods can legitimately reproduce the lead sentences
 EXTRACTIVE = ('textrank', 'tfidfrank')
 
@@ -47,7 +46,7 @@ def main():
         args.max_sentences = DEFAULT_MAX_SENTENCES[args.dataset]
 
     loader = DatasetLoader(args.dataset)
-    docs = loader.load_fixed_manifest(args.dataset, os.path.join(MANIFEST_DIR, f'{args.dataset}_manifest.csv'))
+    docs = loader.load_evaluation_set(args.dataset)
     articles = {_hash(d['reference_summary']): d['article'] for d in docs}
 
     failed = False

@@ -1,5 +1,5 @@
 import time
-from typing import Any, Callable, Tuple, Type
+from typing import Any, Callable, Tuple
 
 
 class RateLimiter:
@@ -19,7 +19,7 @@ class RateLimiter:
 def timed_call_with_retry(
     fn: Callable[[], Any],
     rate_limiter: RateLimiter,
-    retryable: Tuple[Type[BaseException], ...],
+    is_retryable: Callable[[BaseException], bool],
     max_attempts: int = 8,
     initial_backoff: float = 2.0,
     max_backoff: float = 60.0,
@@ -39,8 +39,8 @@ def timed_call_with_retry(
         start = time.perf_counter()
         try:
             result = fn()
-        except retryable as e:
-            if attempt == max_attempts:
+        except Exception as e:
+            if attempt == max_attempts or not is_retryable(e):
                 raise
             print(f"⚠ API error (attempt {attempt}/{max_attempts}), retrying in {backoff:.0f}s: {e}")
             time.sleep(backoff)
