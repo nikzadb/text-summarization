@@ -7,7 +7,7 @@ A comprehensive benchmarking framework for evaluating various text summarization
 ### Summarization Methods
 - **Traditional Methods**: TextRank, TF-IDF Rank
 - **Transformer Models**: DistilBART, BART (facebook/bart-large-cnn)
-- **API Integration**: Google Gemini-2.5-Flash, OpenAI GPT-5-mini
+- **API Integration**: Google Gemini-3.8-Flash, OpenAI GPT-5.4-mini
 
 ### Supported Datasets
 - **CNN/DailyMail**: News article summarization
